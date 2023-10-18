@@ -25,26 +25,109 @@
 
 ;; Code here
 
+(require racket/generic racket/match (for-syntax racket/base))
 
+;;Exceptions
+(struct exn:fail:scheme exn:fail ())
+(struct exn:fail:scheme:syntax exn:fail:scheme ())
+
+;;Macros
+(define-syntax (check-and-extract-form stx)
+  (syntax-case stx ()
+    ((_ val pattern id)
+     #'(match val
+         (pattern id)
+         (_ (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))
+    ((_ val pattern id pred)
+     #'(match val
+         (pattern #:when (pred id) id)
+         (_ (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))))
+
+;;Utilities
+(define (last-expr? lst)
+  ;;Ensure that the last form is not a define form
+  (match lst
+    ((list _ ... last) #:when (not (define? last)) #t)
+    (_ #f)))
+(define (primitive? f) (or (exact-integer? f) (boolean? f) (symbol? f) (null? f) (string? f)))
+(define (simple-representation? f)
+  (or (primitive? f) (and (pair? f) (simple-representation? (car f)) (simple-representation? (cdr f)))))
+
+;;Special forms
+;;Only syntax are checked here
+(define forms '(define set! lambda begin quote if))
+(define-generics define-form
+  (define? define-form)
+  (define-id define-form)
+  (define-val define-form)
+  #:defaults ((simple-representation?
+               (define (define? l) (eq? 'define (car l)))
+               (define (define-id f) (check-and-extract-form f (list 'define id _) id symbol?))
+               (define (define-val f) (check-and-extract-form f (list 'define _ val) val (lambda (f) (not (define? f))))))))
+(define-generics set!-form
+  (set!? set!-form)
+  (set!-id set!-form)
+  (set!-val set!-form)
+  #:defaults ((simple-representation?
+               (define (set!? l) (eq? 'set! (car l)))
+               (define (set!-id f) (check-and-extract-form f (list 'set! id _) id symbol?))
+               (define (set!-val f) (check-and-extract-form f (list 'define _ val) val (lambda (f) (not (define? f))))))))
+(define-generics lambda-form
+  (lambda? lambda-form)
+  (lambda-args lambda-form)
+  (lambda-body lambda-form)
+  #:defaults ((simple-representation?
+               (define (lambda? l) (eq? 'lambda (car l)))
+               (define (lambda-args f) (check-and-extract-form f (list 'lambda (list args ...) _ ...) args (lambda (l) (andmap symbol? l))))
+               (define (lambda-body f) (check-and-extract-form f (list 'lambda (list _ ...) body ...) body last-expr?)))))
+(define-generics begin-form
+  (begin? begin-form)
+  (begin-body begin-form)
+  #:defaults ((simple-representation?
+               (define (begin? l) (eq? 'begin (car l)))
+               (define (begin-body f) (check-and-extract-form f (list 'begin body ...) body last-expr?)))))
+(define-generics quote-form
+  (quote? quote-form)
+  (quote-datum quote-form)
+  #:defaults ((simple-representation?
+               (define (quote? l) (eq? 'quote (car l)))
+               (define (quote-datum f) (check-and-extract-form f (list 'quote datum) datum)))))
+(define-generics if-form
+  (if? if-form)
+  (if-test if-form)
+  (if-first-branch if-form)
+  (if-second-branch if-form)
+  #:defaults ((simple-representation?
+               (define (if? l) (eq? 'if (car l)))
+               (define (if-test f) (check-and-extract-form f (list 'if test first second) test (lambda (f) (not (define? f)))))
+               (define (if-first-branch f) (check-and-extract-form f (list 'if test first second) first (lambda (f) (not (define? f)))))
+               (define (if-second-branch f) (check-and-extract-form f (list 'if test first second) second (lambda (f) (not (define? f))))))))
+
+;;Application
+(define-generics s-exp
+  (expression? s-exp)
+  (expression-operator s-exp)
+  (expression-operand s-exp)
+  #:defaults ((simple-representation?
+               (define (expression? l) (or (primitive? l) (and (list? l) (not (null? l)) (not (ormap (lambda (h) (eq? h (car l))) forms)))))
+               (define (expression-operator l) (car l))
+               (define (expression-operand l) (cdr l)))))
 
 (module+ test
   ;; Any code in this `test` submodule runs when this file is run using DrRacket
   ;; or with `raco test`. The code here does not run when this file is
   ;; required by another module.
 
-  (check-equal? (+ 2 2) 4))
-
-(module+ main
-  ;; (Optional) main submodule. Put code here if you need it to be executed when
-  ;; this file is run using DrRacket or the `racket` executable.  The code here
-  ;; does not run when this file is required by another module. Documentation:
-  ;; http://docs.racket-lang.org/guide/Module_Syntax.html#%28part._main-and-test%29
-
-  (require racket/cmdline)
-  (define who (box "world"))
-  (command-line
-    #:program "my-program"
-    #:once-each
-    [("-n" "--name") name "Who to say hello to" (set-box! who name)]
-    #:args ()
-    (printf "hello ~a~n" (unbox who))))
+  ;;Predicates
+  (check-true (simple-representation? '(+ 1 2)))
+  (check-false (simple-representation? 1.2))
+  (check-true (primitive? "a"))
+  (check-false (primitive? #"a"))
+  (check-true (expression? '(+ 2 2)))
+  ;;Exceptions
+  (check-exn exn:fail:scheme:syntax? (lambda () (set!-id '(set! (+ 1 2) 3))))
+  (check-exn exn:fail:scheme:syntax? (lambda () (begin-body '(begin (+ 1 2) (define a 1)))))
+  (check-exn exn:fail:scheme:syntax? (lambda () (lambda-args '(lambda (+ 1) (+ 1 2)))))
+  ;;Selectors
+  (check-equal? (if-test '(if (+ 1 2) 1 2)) '(+ 1 2))
+  (check-equal? (quote-datum ''(1 . 2)) '(1 . 2)))
