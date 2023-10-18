@@ -44,10 +44,11 @@
          (_ (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))))
 
 ;;Utilities
+(define (not-define? f) (not (define? f)))
 (define (last-expr? lst)
   ;;Ensure that the last form is not a define form
   (match lst
-    ((list _ ... last) #:when (not (define? last)) #t)
+    ((list _ ... last) #:when (not-define? last) #t)
     (_ #f)))
 (define (non-empty-list? l) (and (list? l) (not (null? l))))
 (define (primitive? f) (or (exact-integer? f) (boolean? f) (symbol? f) (null? f) (string? f)))
@@ -64,7 +65,7 @@
   #:defaults ((simple-representation?
                (define (define? l) (and (non-empty-list? l) (eq? 'define (car l))))
                (define (define-id f) (check-and-extract-form f (list 'define id _) id symbol?))
-               (define (define-val f) (check-and-extract-form f (list 'define _ val) val (lambda (f) (not (define? f))))))))
+               (define (define-val f) (check-and-extract-form f (list 'define _ val) val not-define?)))))
 (define-generics set!-form
   (set!? set!-form)
   (set!-id set!-form)
@@ -72,7 +73,7 @@
   #:defaults ((simple-representation?
                (define (set!? l) (and (non-empty-list? l) (eq? 'set! (car l))))
                (define (set!-id f) (check-and-extract-form f (list 'set! id _) id symbol?))
-               (define (set!-val f) (check-and-extract-form f (list 'define _ val) val (lambda (f) (not (define? f))))))))
+               (define (set!-val f) (check-and-extract-form f (list 'define _ val) val not-define?)))))
 (define-generics lambda-form
   (lambda? lambda-form)
   (lambda-args lambda-form)
@@ -100,9 +101,9 @@
   (if-second-branch if-form)
   #:defaults ((simple-representation?
                (define (if? l) (and (non-empty-list? l) (eq? 'if (car l))))
-               (define (if-test f) (check-and-extract-form f (list 'if test first second) test (lambda (f) (not (define? f)))))
-               (define (if-first-branch f) (check-and-extract-form f (list 'if test first second) first (lambda (f) (not (define? f)))))
-               (define (if-second-branch f) (check-and-extract-form f (list 'if test first second) second (lambda (f) (not (define? f))))))))
+               (define (if-test f) (check-and-extract-form f (list 'if test first second) test not-define?))
+               (define (if-first-branch f) (check-and-extract-form f (list 'if test first second) first not-define?))
+               (define (if-second-branch f) (check-and-extract-form f (list 'if test first second) second not-define?)))))
 
 ;;Application
 (define-generics s-exp
