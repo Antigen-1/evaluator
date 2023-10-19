@@ -210,18 +210,21 @@
 (define (n:expression-operator f) (expression-operator f))
 (define (n:expression-operand f) (expression-operand f))
 
-;;Expansion, evaluator and application
+;;Expansion, evaluation and application
 (define-values (eval-scheme apply-scheme)
   (letrec ((eval-scheme
             (lambda (exp env)
-              (cond ((scheme-self-evaluating? exp) exp)
-                    ((let ((expanded (expand exp env)))
+              (cond ((let ((expanded (expand exp env)))
                        (if (__expander_box? expanded)
                            expanded
                            #f))
                      =>
+                     ;;You have to handle identifiers yourself
                      (lambda (e) (eval-scheme (__expander_box-expression e) env)))
+
+                    ((scheme-self-evaluating? exp) exp)
                     ((scheme-variable? exp) (refer-env env exp))
+
                     ((if? exp)
                      (if (eval-scheme (n:if-test exp) env)
                          (eval-scheme (n:if-first exp) env)
@@ -233,8 +236,10 @@
                      (refer-env env (n:set!-id exp) #:proc (make-tbl-setter (eval-scheme (n:set!-val exp) env))))
                     ((define? exp)
                      (set-env env (n:define-id exp) (eval-scheme (n:define-val exp) env)))
+
                     ((expression? exp) (apply-scheme (eval-scheme (n:expression-operator exp) env)
                                                      (map (lambda (e) (eval-scheme e env)) (n:expression-operand exp))))
+
                     (else (raise (exn:fail:scheme:syntax (format "Malformed scheme expression: ~s" exp)) (current-continuation-marks))))))
            (apply-scheme
             (lambda (operator operand)
