@@ -1,5 +1,5 @@
 #lang scribble/manual
-@require[@for-label[scheme
+@require[@for-label[scheme-evaluator
                     racket/base]]
 
 @title{scheme}
