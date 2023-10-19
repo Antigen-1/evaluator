@@ -50,7 +50,7 @@
 
          (contract-out
           #:exists env?
-          (make-env (->* ((listof (cons/c symbol? any/c))) (#:expander (-> any/c any/c all-implement/c)) env?))
+          (make-env (->* ((listof (cons/c symbol? any/c))) (#:expander (-> any/c (-> all-implement/c any) any)) env?))
           (eval-scheme (->
                         all-implement/c
                         env?
