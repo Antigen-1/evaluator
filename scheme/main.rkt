@@ -80,12 +80,6 @@
 (define _void (__void))
 
 ;;Utilities
-(define (not-define? f) (not (define? f)))
-(define (last-expr? lst)
-  ;;Ensure that the last form is not a define form
-  (match lst
-    ((list _ ... last) #:when (not-define? last) #t)
-    (_ #f)))
 (define (non-empty-list? l) (and (list? l) (not (null? l))))
 
 ;;Representation
@@ -197,15 +191,15 @@
 ;;Selectors with result checking
 (define (check-result v pred) (cond ((pred v) v) (else (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" v) (current-continuation-marks))))))
 (define (n:define-id f) (check-result (define-id f) scheme-variable?))
-(define (n:define-val f) (check-result (define-val f) not-define?))
+(define (n:define-val f) (define-val f))
 (define (n:set!-id f) (check-result (set!-id f) scheme-variable?))
-(define (n:set!-val f) (check-result (set!-val f) not-define?))
-(define (n:begin-body f) (check-result (begin-body f) last-expr?))
+(define (n:set!-val f) (set!-val f))
+(define (n:begin-body f) (check-result (begin-body f) list?))
 (define (n:lambda-args f) (check-result (lambda-args f) (listof scheme-variable?)))
-(define (n:lambda-body f) (check-result (lambda-body f) last-expr?))
-(define (n:if-test f) (check-result (if-test f) not-define?))
-(define (n:if-first f) (check-result (if-first-branch f) not-define?))
-(define (n:if-second f) (check-result (if-second-branch f) not-define?))
+(define (n:lambda-body f) (check-result (lambda-body f) list?))
+(define (n:if-test f) (if-test f))
+(define (n:if-first f) (if-first-branch f))
+(define (n:if-second f) (if-second-branch f))
 (define (n:quote-datum f) (quote-datum f))
 (define (n:expression-operator f) (expression-operator f))
 (define (n:expression-operand f) (expression-operand f))
@@ -252,12 +246,16 @@
                     (else (raise (exn:fail:scheme:application (format "~s is not an applicable object" operator) (current-continuation-marks))))))))
     (values eval-scheme apply-scheme)))
 
+(module* namespace racket/base
+  (require rackunit racket/list (submod ".."))
+  (provide (all-from-out rackunit racket/list racket/base (submod ".."))))
+
 (module+ test
   ;; Any code in this `test` submodule runs when this file is run using DrRacket
   ;; or with `raco test`. The code here does not run when this file is
   ;; required by another module.
 
-  (require racket/list rackunit (submod ".."))
+  (require racket/runtime-path (submod ".." namespace))
 
   ;;Predicates
   (check-true (default-representation? (default:make-expression '+ '(1 2))))
@@ -267,7 +265,7 @@
   (check-true (expression? (default:make-expression '+ '(2 2))))
   ;;Exceptions
   (check-exn exn:fail:scheme:syntax? (lambda () (n:set!-id (default:make-set! '(+ 1 2) 3))))
-  (check-exn exn:fail:scheme:syntax? (lambda () (n:begin-body (default:make-begin '((+ 1 2) (define a 1))))))
+  #;(check-exn exn:fail:scheme:syntax? (lambda () (n:begin-body (default:make-begin '((+ 1 2) (define a 1))))))
   (check-exn exn:fail:scheme:syntax? (lambda () (n:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
   (check-exn exn:fail:scheme:syntax:unbound? (lambda () (eval-scheme '(+) (make-env null))))
   (check-exn exn:fail:scheme:application? (lambda () (eval-scheme '(+) (make-env (list (cons '+ 0))))))
@@ -281,33 +279,61 @@
       ((list 'or clauses ...)
        (cons (foldl (lambda (c i) (default:make-if c c i)) #f (reverse clauses))))
       (_ #f)))
-  (define namespace (make-env (list
-                               (cons '+ +)
-                               (cons '- -)
-                               (cons '* *)
-                               (cons '/ /)
-                               (cons '= =)
-                               (cons 'car car)
-                               (cons 'cdr cdr)
-                               (cons 'cons cons)
-                               (cons 'list list)
-                               (cons 'null null)
-                               (cons 'null? null?)
-                               (cons 'eval eval-scheme)
-                               (cons 'apply apply-scheme))
-                              #:expander or-matcher))
+  (define env (make-env (list
+                         (cons '+ +)
+                         (cons '- -)
+                         (cons '* *)
+                         (cons '/ /)
+                         (cons '= =)
+                         (cons 'car car)
+                         (cons 'cdr cdr)
+                         (cons 'cons cons)
+                         (cons 'list list)
+                         (cons 'null null)
+                         (cons 'null? null?)
+                         (cons 'eval eval-scheme)
+                         (cons 'apply apply-scheme))
+                        #:expander or-matcher))
   (check-true
    (=
-    (time
-     (eval-scheme
-      '(begin
-         (define map (lambda (proc l)
-                       (if (null? l)
-                           '()
-                           (cons (proc (car l)) (map proc (cdr l))))))
-         (apply + (map (lambda (v) (* v (+ v -1))) (list 1 2))))
-      namespace))
+    (eval-scheme
+     '(begin
+        (define map (lambda (proc l)
+                      (if (null? l)
+                          '()
+                          (cons (proc (car l)) (map proc (cdr l))))))
+        (apply + (map (lambda (v) (* v (+ v -1))) (list 1 2))))
+     env)
     2))
-  (check-true (= (apply-scheme (eval-scheme '(lambda (a) (set! a 1) a) namespace) (list 0)) 1))
-  (check-true (eval-scheme '(or (= 1 2) (= 2 2)) namespace))
-  (check-true (= 2 (eval-scheme '(or (= 1 2) 2 (= 2 2)) namespace))))
+  (check-true (= (apply-scheme (eval-scheme '(lambda (a) (set! a 1) a) env) (list 0)) 1))
+  (check-true (eval-scheme '(or (= 1 2) (= 2 2)) env))
+  (check-true (= 2 (eval-scheme '(or (= 1 2) 2 (= 2 2)) env)))
+  ;;Benchmark
+  (define-runtime-module-path-index namespace-module '(submod ".." namespace))
+  (define-namespace-anchor anchor)
+  (define ns (module->namespace namespace-module (namespace-anchor->empty-namespace anchor)))
+  (eval
+   '(begin
+      (define scheme-main
+        (eval-scheme
+         '(begin
+            (define reverse (lambda (l r) (if (null? l) r (reverse (cdr l) (cons (car l) r)))))
+            (define map (lambda (proc l r) (if (null? l) (reverse r null) (map proc (cdr l) (cons (proc (car l)) r)))))
+            (define add1 (lambda (n) (+ n 1)))
+            (define main (lambda (l) (reverse (map add1 l null) null)))
+            main)
+         (make-env (list (cons 'cons cons)
+                         (cons 'car car)
+                         (cons 'cdr cdr)
+                         (cons 'null? null?)
+                         (cons 'null null)
+                         (cons '+ +)))))
+      (define (racket-native-main l)
+        (reverse (map add1 l))))
+   ns)
+  (define benchmark
+    '(let ((lst (range 0 200000)))
+       (check-equal? (time (apply-scheme scheme-main (list lst)))
+                     (time (apply racket-native-main (list lst))))))
+  (writeln benchmark)
+  (eval benchmark ns))
