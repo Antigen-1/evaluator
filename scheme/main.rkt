@@ -50,15 +50,9 @@
 
          (contract-out
           #:exists env?
-          (make-env (-> (listof (cons/c symbol? any/c)) env?))
+          (make-env (->* ((listof (cons/c symbol? any/c))) (#:expander (-> any/c any/c any)) env?))
           (eval-scheme (->
-                        (and/c define-implement?
-                               set!-implement?
-                               begin-implement?
-                               if-implement?
-                               quote-implement?
-                               lambda-implement?
-                               s-exp-implement?)
+                        all-implement/c
                         env?
                         any))
           (apply-scheme (-> any/c list? any))))
@@ -80,6 +74,7 @@
 ;;Structures
 (struct __closure (env args body))
 (struct __void ())
+(struct __expander_box (expression))
 
 ;;Constants
 (define _void (__void))
@@ -111,15 +106,17 @@
 (define (make-expression operator operand) (cons operator operand))
 
 ;;Environments
-(define (make-env assocs) (list (make-hasheq assocs)))
-(define (add-frame env assocs) (cons (make-hasheq assocs) env))
+(struct environment (frames expander))
+(define (make-env (assocs null) #:expander (expander (lambda _ #f))) (environment (list (make-hasheq assocs)) expander))
+(define (add-frame env assocs) (struct-copy environment env (frames (cons (make-hasheq assocs) (environment-frames env)))))
 (define (refer-env env id #:proc (proc hash-ref))
   (let/cc return
-    (for ((t (in-list env)))
+    (for ((t (in-list (environment-frames env))))
       (cond ((hash-has-key? t id) (return (proc t id)))))
     (raise (exn:fail:scheme:syntax:unbound (format "~a is not bound" id) (current-continuation-marks)))))
+(define (expand form env) ((environment-expander env) form __expander_box))
 (define ((make-tbl-setter val) t id) (hash-set! t id val) _void)
-(define (set-env env id val) (hash-set! (car env) id val) _void)
+(define (set-env env id val) (hash-set! (car (environment-frames env)) id val) _void)
 
 ;;Special forms
 ;;Only syntax are checked here
@@ -177,7 +174,7 @@
                      (define (if-first-branch f) (check-and-extract-form f (list 'if test first second) first))
                      (define (if-second-branch f) (check-and-extract-form f (list 'if test first second) second)))))
 
-;;Application
+;;Scheme expression
 (define-generics s-exp
   (expression? s-exp)
   (expression-operator s-exp)
@@ -188,7 +185,16 @@
                      (define (expression-operator l) (car l))
                      (define (expression-operand l) (cdr l)))))
 
-;;Checked selectors
+;;Contracts
+(define all-implement/c (and/c define-implement?
+                               set!-implement?
+                               begin-implement?
+                               if-implement?
+                               quote-implement?
+                               lambda-implement?
+                               s-exp-implement?))
+
+;;Selectors with result checking
 (define (check-result v pred) (cond ((pred v) v) (else (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" v) (current-continuation-marks))))))
 (define (n:define-id f) (check-result (define-id f) scheme-variable?))
 (define (n:define-val f) (check-result (define-val f) not-define?))
@@ -204,10 +210,17 @@
 (define (n:expression-operator f) (expression-operator f))
 (define (n:expression-operand f) (expression-operand f))
 
+;;Expansion, evaluator and application
 (define-values (eval-scheme apply-scheme)
   (letrec ((eval-scheme
             (lambda (exp env)
               (cond ((scheme-self-evaluating? exp) exp)
+                    ((let ((expanded (expand exp env)))
+                       (if (__expander_box? expanded)
+                           expanded
+                           #f))
+                     =>
+                     (lambda (e) (eval-scheme (__expander_box-expression e) env)))
                     ((scheme-variable? exp) (refer-env env exp))
                     ((if? exp)
                      (if (eval-scheme (n:if-test exp) env)
@@ -239,7 +252,7 @@
   ;; or with `raco test`. The code here does not run when this file is
   ;; required by another module.
 
-  (require rackunit (submod ".."))
+  (require racket/list rackunit (submod ".."))
 
   ;;Predicates
   (check-true (default-representation? (default:make-expression '+ '(1 2))))
@@ -257,12 +270,18 @@
   (check-eq? (n:define-id (default:make-define 'a 1)) 'a)
   (check-equal? (n:if-test (default:make-if '(+ 1 2) 1 2)) '(+ 1 2))
   (check-equal? (n:quote-datum (default:make-quote '(1 . 2))) '(1 . 2))
-  ;;Eval and apply
+  ;;Expansion, evaluation and application
+  (define (or-matcher exp cons)
+    (match exp
+      ((list 'or clauses ...)
+       (cons (foldl (lambda (c i) (default:make-if c c i)) #f (reverse clauses))))
+      (_ #f)))
   (define namespace (make-env (list
                                (cons '+ +)
                                (cons '- -)
                                (cons '* *)
                                (cons '/ /)
+                               (cons '= =)
                                (cons 'car car)
                                (cons 'cdr cdr)
                                (cons 'cons cons)
@@ -270,7 +289,8 @@
                                (cons 'null null)
                                (cons 'null? null?)
                                (cons 'eval eval-scheme)
-                               (cons 'apply apply-scheme))))
+                               (cons 'apply apply-scheme))
+                              #:expander or-matcher))
   (check-true
    (=
     (time
@@ -283,4 +303,6 @@
          (apply + (map (lambda (v) (* v (+ v -1))) (list 1 2))))
       namespace))
     2))
-  (check-true (= (apply-scheme (eval-scheme '(lambda (a) (set! a 1) a) namespace) (list 0)) 1)))
+  (check-true (= (apply-scheme (eval-scheme '(lambda (a) (set! a 1) a) namespace) (list 0)) 1))
+  (check-true (eval-scheme '(or (= 1 2) (= 2 2)) namespace))
+  (check-true (= 2 (eval-scheme '(or (= 1 2) 2 (= 2 2)) namespace))))
