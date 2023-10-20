@@ -106,18 +106,23 @@
 (define (make-if test first second) (list 'if test first second))
 (define (make-expression operator operand) (cons operator operand))
 
+;;Frames
+(define (make-frame assocs) (make-hasheq assocs))
+(define ((make-frame-setter val) t id) (hash-set! t id val) _void)
+(define (has-id? frame id) (hash-has-key? frame id))
+(define (set-frame! frame id val) (hash-set! frame id val))
+(define (refer-frame frame id) (hash-ref frame id))
 ;;Environments
 (struct environment (frames expander))
-(define (make-env (assocs null) #:expander (expander (lambda _ #f))) (environment (list (make-hasheq assocs)) expander))
-(define (add-frame env assocs) (struct-copy environment env (frames (cons (make-hasheq assocs) (environment-frames env)))))
-(define (refer-env env id #:proc (proc hash-ref))
+(define (make-env (assocs null) #:expander (expander (lambda _ #f))) (environment (list (make-frame assocs)) expander))
+(define (add-frame env assocs) (struct-copy environment env (frames (cons (make-frame assocs) (environment-frames env)))))
+(define (refer-env env id #:proc (proc refer-frame))
   (let/cc return
     (for ((t (in-list (environment-frames env))))
-      (cond ((hash-has-key? t id) (return (proc t id)))))
+      (cond ((has-id? t id) (return (proc t id)))))
     (raise (exn:fail:scheme:syntax:unbound (format "~a is not bound" id) (current-continuation-marks)))))
 (define (expand form env) ((environment-expander env) form __expander_box))
-(define ((make-tbl-setter val) t id) (hash-set! t id val) _void)
-(define (set-env env id val) (hash-set! (car (environment-frames env)) id val) _void)
+(define (set-env! env id val) (set-frame! (car (environment-frames env)) id val) _void)
 
 ;;Data-directed dispatching
 ;;--------------------------
@@ -236,9 +241,9 @@
                     ((begin? exp) (for/fold ((_ _void)) ((e (in-list (n:begin-body exp)))) (eval-scheme e env)))
                     ((lambda? exp) (__closure env (n:lambda-args exp) (n:lambda-body exp)))
                     ((set!? exp)
-                     (refer-env env (n:set!-id exp) #:proc (make-tbl-setter (eval-scheme (n:set!-val exp) env))))
+                     (refer-env env (n:set!-id exp) #:proc (make-frame-setter (eval-scheme (n:set!-val exp) env))))
                     ((define? exp)
-                     (set-env env (n:define-id exp) (eval-scheme (n:define-val exp) env)))
+                     (set-env! env (n:define-id exp) (eval-scheme (n:define-val exp) env)))
 
                     ((expression? exp) (apply-scheme (eval-scheme (n:expression-operator exp) env)
                                                      (map (lambda (e) (eval-scheme e env)) (n:expression-operand exp))))
