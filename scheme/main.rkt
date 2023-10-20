@@ -91,7 +91,7 @@
     (values (reverse (car r)) (reverse (cdr r))))
 
   (define has-null? (memf null? ll))
-  (define has-not-null? (memf not-null? ll))
+  (define has-not-null? (or (and (not-null? ll) (not has-null?)) (memf not-null? ll)))
   (cond ((not has-not-null?) null)
         ((and has-null? has-not-null?) (handler))
         (else
