@@ -29,7 +29,7 @@
          (struct-out exn:fail:scheme:application)
          (struct-out __void)
 
-         scheme-self-evaluating? scheme-variable? scheme-primitive? scheme-procedure?
+         scheme-self-evaluating? scheme-variable? scheme-procedure?
 
          default-representation?
          (rename-out (make-if default:make-if)
@@ -50,6 +50,7 @@
 
          (contract-out
           #:exists env?
+          (make-primitive (-> procedure? exact-nonnegative-integer? any))
           (make-env (->* ((listof (cons/c symbol? any/c))) (#:expander (-> any/c (-> all-implement/c any) any)) env?))
           (eval-scheme (->
                         all-implement/c
@@ -73,6 +74,7 @@
          (_ (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))))
 
 ;;Structures
+(struct __primitive (proc arity) #:property prop:procedure (struct-field-index proc) #:constructor-name make-primitive)
 (struct __closure (env args body))
 (struct __void ())
 (struct __expander_box (expression))
@@ -83,27 +85,16 @@
 ;;Utilities
 (define (non-empty-list? l) (and (list? l) (not (null? l))))
 (define (check-result v pred) (cond ((pred v) v) (else (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" v) (current-continuation-marks))))))
-(define (raise-arity args vals) (raise (exn:fail:scheme:application:arity (format "Arity mismatch: (~s ~s)" args vals) (current-continuation-marks))))
+(define (raise-arity args vals) (raise (exn:fail:scheme:application:arity (format "Arity mismatch:\nexpected: ~s\nactual: ~s" args vals) (current-continuation-marks))))
 (define (map* proc #:handler handler . ll)
-  (define (not-null? l) (not (null? l)))
-  (define (split-lists ll)
-    (define r (foldl (lambda (l i) (cons (cons (car l) (car i)) (cons (cdr l) (cdr i)))) (cons null null) ll))
-    (values (reverse (car r)) (reverse (cdr r))))
-
-  (define has-null? (memf null? ll))
-  (define has-not-null? (or (and (not-null? ll) (not has-null?)) (memf not-null? ll)))
-  (cond ((not has-not-null?) null)
-        ((and has-null? has-not-null?) (handler))
-        (else
-         (define-values (cars cdrs) (split-lists ll))
-         (cons (apply proc cars) (apply map* proc #:handler handler cdrs)))))
+  (cond ((apply = (map length ll)) (apply map proc ll))
+        (else (handler))))
 
 ;;Representation
 ;;General predicates
 (define (scheme-self-evaluating? v) (or (exact-integer? v) (boolean? v) (bytes? v) (__void? v)))
 (define (scheme-variable? v) (symbol? v))
-(define (scheme-primitive? v) (or (scheme-self-evaluating? v) (scheme-variable? v)))
-(define (scheme-procedure? v) (or (procedure? v) (__closure? v)))
+(define (scheme-procedure? v) (or (__primitive? v) (__closure? v)))
 ;;Default representation
 (define (default-representation? f)
   (non-empty-list? f))
@@ -252,9 +243,12 @@
                     (else (raise (exn:fail:scheme:syntax (format "Malformed scheme expression: ~s" exp)) (current-continuation-marks))))))
            (apply-scheme
             (lambda (operator operand)
-              (cond ((procedure? operator) (apply operator operand))
+              (cond ((__primitive? operator)
+                     (cond ((= (length operand) (__primitive-arity operator))
+                            (apply operator operand))
+                           (else (raise-arity (__primitive-arity operator) (length operand)))))
                     ((__closure? operator)
-                     (define env (add-frame (__closure-env operator) (map* cons #:handler (lambda () (raise-arity (__closure-args operator) operand)) (__closure-args operator) operand)))
+                     (define env (add-frame (__closure-env operator) (map* cons #:handler (lambda () (raise-arity (length (__closure-args operator)) (length operand))) (__closure-args operator) operand)))
                      (for/fold ((_ _void))
                                ((ins (in-list (__closure-body operator))))
                        (eval-scheme ins env)))
@@ -270,13 +264,13 @@
   ;; or with `raco test`. The code here does not run when this file is
   ;; required by another module.
 
-  (require racket/runtime-path (submod ".." namespace))
+  (require racket/runtime-path racket/pretty (submod ".." namespace))
 
   ;;Predicates
   (check-true (default-representation? (default:make-expression '+ '(1 2))))
   (check-false (default-representation? 1.2))
-  (check-true (scheme-primitive? #"a"))
-  (check-true (scheme-procedure? +))
+  (check-false (scheme-procedure? +))
+  (check-true (scheme-procedure? (make-primitive + 2)))
   (check-true (expression? (default:make-expression '+ '(2 2))))
   ;;Exceptions
   (check-exn exn:fail:scheme:syntax? (lambda () (n:set!-id (default:make-set! '(+ 1 2) 3))))
@@ -284,7 +278,7 @@
   (check-exn exn:fail:scheme:syntax? (lambda () (n:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
   (check-exn exn:fail:scheme:syntax:unbound? (lambda () (eval-scheme '(+) (make-env null))))
   (check-exn exn:fail:scheme:application? (lambda () (eval-scheme '(+) (make-env (list (cons '+ 0))))))
-  (check-exn exn:fail:scheme:application:arity? (lambda () (eval-scheme '((lambda (n) (+ n 1))) (make-env (list (cons '+ +))))))
+  (check-exn exn:fail:scheme:application:arity? (lambda () (eval-scheme '((lambda (n) (+ n 1))) (make-env (list (cons '+ (make-primitive + 2)))))))
   ;;Selectors
   (check-eq? (n:define-id (default:make-define 'a 1)) 'a)
   (check-equal? (n:if-test (default:make-if '(+ 1 2) 1 2)) '(+ 1 2))
@@ -296,19 +290,17 @@
        (cons (foldl (lambda (c i) (default:make-if c c i)) #f (reverse clauses))))
       (_ #f)))
   (define env (make-env (list
-                         (cons '+ +)
-                         (cons '- -)
-                         (cons '* *)
-                         (cons '/ /)
-                         (cons '= =)
-                         (cons 'car car)
-                         (cons 'cdr cdr)
-                         (cons 'cons cons)
-                         (cons 'list list)
+                         (cons '+ (make-primitive + 2))
+                         (cons '* (make-primitive * 2))
+                         (cons '/ (make-primitive / 2))
+                         (cons '= (make-primitive = 2))
+                         (cons 'car (make-primitive car 1))
+                         (cons 'cdr (make-primitive cdr 1))
+                         (cons 'cons (make-primitive cons 2))
+                         (cons 'list (make-primitive list 2))
                          (cons 'null null)
-                         (cons 'null? null?)
-                         (cons 'eval eval-scheme)
-                         (cons 'apply apply-scheme))
+                         (cons 'null? (make-primitive null? 1))
+                         (cons 'apply (make-primitive apply-scheme 2)))
                         #:expander or-matcher))
   (check-true
    (=
@@ -316,7 +308,7 @@
      '(begin
         (define map (lambda (proc l)
                       (if (null? l)
-                          '()
+                          null
                           (cons (proc (car l)) (map proc (cdr l))))))
         (apply + (map (lambda (v) (* v (+ v -1))) (list 1 2))))
      env)
@@ -328,27 +320,25 @@
   (define-runtime-module-path-index namespace-module '(submod ".." namespace))
   (define-namespace-anchor anchor)
   (define ns (module->namespace namespace-module (namespace-anchor->empty-namespace anchor)))
-  (eval
-   '(begin
-      (define scheme-main
-        (eval-scheme
-         '(begin
-            (define reverse (lambda (l r) (if (null? l) r (reverse (cdr l) (cons (car l) r)))))
-            (define map (lambda (proc l r) (if (null? l) (reverse r null) (map proc (cdr l) (cons (proc (car l)) r)))))
-            (define main (lambda (l) (reverse (map add1 l null) null)))
-            main)
-         (make-env (list (cons 'cons cons)
-                         (cons 'car car)
-                         (cons 'cdr cdr)
-                         (cons 'null? null?)
-                         (cons 'null null)
-                         (cons 'add1 add1)))))
-      (define (racket-native-main l)
-        (reverse (map add1 l))))
-   ns)
   (define benchmark
-    '(let ((lst (range 0 200000)))
-       (check-equal? (time (apply-scheme scheme-main (list lst)))
-                     (time (apply racket-native-main (list lst))))))
-  (writeln benchmark)
+    '(begin
+       (define scheme-main
+         (time
+          (eval-scheme
+           '(begin
+              (define reverse (lambda (l r) (if (null? l) r (reverse (cdr l) (cons (car l) r)))))
+              (define map (lambda (proc l r) (if (null? l) (reverse r null) (map proc (cdr l) (cons (proc (car l)) r)))))
+              (lambda (l) (reverse (map add1 l null) null)))
+           (make-env (list (cons 'cons (make-primitive cons 2))
+                           (cons 'car (make-primitive car 1))
+                           (cons 'cdr (make-primitive cdr 1))
+                           (cons 'null? (make-primitive null? 1))
+                           (cons 'null null)
+                           (cons 'add1 (make-primitive add1 1)))))))
+       (define racket-main
+         (time (eval '(lambda (l) (reverse (map add1 l))) (make-base-namespace))))
+       (let ((lst (range 0 2000000)))
+         (check-equal? (time (apply-scheme scheme-main (list lst)))
+                       (time (apply racket-main (list lst)))))))
+  (pretty-write benchmark)
   (eval benchmark ns))
