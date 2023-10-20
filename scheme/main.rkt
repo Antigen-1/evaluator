@@ -62,6 +62,7 @@
 (struct exn:fail:scheme:syntax exn:fail:scheme ())
 (struct exn:fail:scheme:syntax:unbound exn:fail:scheme:syntax ())
 (struct exn:fail:scheme:application exn:fail:scheme ())
+(struct exn:fail:scheme:application:arity exn:fail:scheme:application ())
 
 ;;Macros
 (define-syntax (check-and-extract-form stx)
@@ -81,6 +82,22 @@
 
 ;;Utilities
 (define (non-empty-list? l) (and (list? l) (not (null? l))))
+(define (raise-arity args vals) (raise (exn:fail:scheme:application:arity (format "Arity mismatch: (~s ~s)" args vals) (current-continuation-marks))))
+(define (map* proc #:handler handler . ll)
+  (define (not-null? l) (not (null? l)))
+  (define (split-car-cdr ll)
+    (define r (foldl (lambda (l i) (list (cons (car l) (car i)) (cons (cdr l) (cdr i)))) (cons null null) ll))
+    (values (reverse (car r)) (reverse (cdr r))))
+
+  (define has-null? (memf null? ll))
+  (define has-not-null? (memf not-null? ll))
+  (cond ((not has-not-null?) null)
+        ((and has-null? has-not-null?) (handler))
+        (else
+         (call-with-values
+          (lambda () (split-car-cdr ll))
+          (lambda (cars cdrs)
+            (cons (apply proc cars) (apply map* proc #:handler handler cdrs)))))))
 
 ;;Representation
 ;;General predicates
@@ -239,7 +256,7 @@
             (lambda (operator operand)
               (cond ((procedure? operator) (apply operator operand))
                     ((__closure? operator)
-                     (define env (add-frame (__closure-env operator) (map cons (__closure-args operator) operand)))
+                     (define env (add-frame (__closure-env operator) (map* cons #:handler (lambda () (raise-arity (__closure-args operator) operand)) (__closure-args operator) operand)))
                      (for/fold ((_ _void))
                                ((ins (in-list (__closure-body operator))))
                        (eval-scheme ins env)))
@@ -269,6 +286,7 @@
   (check-exn exn:fail:scheme:syntax? (lambda () (n:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
   (check-exn exn:fail:scheme:syntax:unbound? (lambda () (eval-scheme '(+) (make-env null))))
   (check-exn exn:fail:scheme:application? (lambda () (eval-scheme '(+) (make-env (list (cons '+ 0))))))
+  (check-exn exn:fail:scheme:application:arity? (lambda () (eval-scheme '((lambda (n) (+ n 1))) (make-env (list (cons '+ +))))))
   ;;Selectors
   (check-eq? (n:define-id (default:make-define 'a 1)) 'a)
   (check-equal? (n:if-test (default:make-if '(+ 1 2) 1 2)) '(+ 1 2))
