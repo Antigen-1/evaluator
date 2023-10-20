@@ -82,11 +82,12 @@
 
 ;;Utilities
 (define (non-empty-list? l) (and (list? l) (not (null? l))))
+(define (check-result v pred) (cond ((pred v) v) (else (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" v) (current-continuation-marks))))))
 (define (raise-arity args vals) (raise (exn:fail:scheme:application:arity (format "Arity mismatch: (~s ~s)" args vals) (current-continuation-marks))))
 (define (map* proc #:handler handler . ll)
   (define (not-null? l) (not (null? l)))
   (define (split-car-cdr ll)
-    (define r (foldl (lambda (l i) (list (cons (car l) (car i)) (cons (cdr l) (cdr i)))) (cons null null) ll))
+    (define r (foldl (lambda (l i) (cons (cons (car l) (car i)) (cons (cdr l) (cdr i)))) (cons null null) ll))
     (values (reverse (car r)) (reverse (cdr r))))
 
   (define has-null? (memf null? ll))
@@ -206,7 +207,6 @@
                                s-exp-implement?))
 
 ;;Selectors with result checking
-(define (check-result v pred) (cond ((pred v) v) (else (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" v) (current-continuation-marks))))))
 (define (n:define-id f) (check-result (define-id f) scheme-variable?))
 (define (n:define-val f) (define-val f))
 (define (n:set!-id f) (check-result (set!-id f) scheme-variable?))
@@ -219,7 +219,7 @@
 (define (n:if-second f) (if-second-branch f))
 (define (n:quote-datum f) (quote-datum f))
 (define (n:expression-operator f) (expression-operator f))
-(define (n:expression-operand f) (expression-operand f))
+(define (n:expression-operand f) (check-result (expression-operand f) list?))
 
 ;;Expansion, evaluation and application
 (define-values (eval-scheme apply-scheme)
