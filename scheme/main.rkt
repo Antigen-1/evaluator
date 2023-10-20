@@ -119,6 +119,8 @@
 (define ((make-tbl-setter val) t id) (hash-set! t id val) _void)
 (define (set-env env id val) (hash-set! (car (environment-frames env)) id val) _void)
 
+;;Data-directed dispatching
+;;--------------------------
 ;;Special forms
 ;;Only syntax are checked here
 (define forms '(define set! lambda begin quote if))
@@ -209,6 +211,7 @@
 (define (n:quote-datum f) (quote-datum f))
 (define (n:expression-operator f) (expression-operator f))
 (define (n:expression-operand f) (check-result (expression-operand f) list?))
+;;--------------------------
 
 ;;Expansion, evaluation and application
 (define-values (eval-scheme apply-scheme)
