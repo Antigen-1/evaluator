@@ -86,7 +86,7 @@
 (define (raise-arity args vals) (raise (exn:fail:scheme:application:arity (format "Arity mismatch: (~s ~s)" args vals) (current-continuation-marks))))
 (define (map* proc #:handler handler . ll)
   (define (not-null? l) (not (null? l)))
-  (define (split-car-cdr ll)
+  (define (split-lists ll)
     (define r (foldl (lambda (l i) (cons (cons (car l) (car i)) (cons (cdr l) (cdr i)))) (cons null null) ll))
     (values (reverse (car r)) (reverse (cdr r))))
 
@@ -95,10 +95,8 @@
   (cond ((not has-not-null?) null)
         ((and has-null? has-not-null?) (handler))
         (else
-         (call-with-values
-          (lambda () (split-car-cdr ll))
-          (lambda (cars cdrs)
-            (cons (apply proc cars) (apply map* proc #:handler handler cdrs)))))))
+         (define-values (cars cdrs) (split-lists ll))
+         (cons (apply proc cars) (apply map* proc #:handler handler cdrs)))))
 
 ;;Representation
 ;;General predicates
