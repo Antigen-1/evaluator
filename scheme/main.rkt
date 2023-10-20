@@ -319,7 +319,6 @@
          '(begin
             (define reverse (lambda (l r) (if (null? l) r (reverse (cdr l) (cons (car l) r)))))
             (define map (lambda (proc l r) (if (null? l) (reverse r null) (map proc (cdr l) (cons (proc (car l)) r)))))
-            (define add1 (lambda (n) (+ n 1)))
             (define main (lambda (l) (reverse (map add1 l null) null)))
             main)
          (make-env (list (cons 'cons cons)
@@ -327,7 +326,7 @@
                          (cons 'cdr cdr)
                          (cons 'null? null?)
                          (cons 'null null)
-                         (cons '+ +)))))
+                         (cons 'add1 add1)))))
       (define (racket-native-main l)
         (reverse (map add1 l))))
    ns)
