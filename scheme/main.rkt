@@ -90,7 +90,7 @@
 (define (scheme-procedure? v) (or (procedure? v) (__closure? v)))
 ;;Default representation
 (define (default-representation? f)
-  (list? f))
+  (non-empty-list? f))
 (define (make-define id val) (list 'define id val))
 (define (make-set! id val) (list 'set! id val))
 (define (make-lambda args body) (cons 'lambda (cons args body)))
@@ -121,7 +121,7 @@
   (define-val define-form)
   #:defined-predicate define-implement?
   #:fast-defaults ((default-representation?
-                     (define (define? l) (and (non-empty-list? l) (eq? 'define (car l))))
+                     (define (define? l) (eq? 'define (car l)))
                      (define (define-id f) (check-and-extract-form f (list 'define id _) id))
                      (define (define-val f) (check-and-extract-form f (list 'define _ val) val)))))
 (define-generics set!-form
@@ -130,7 +130,7 @@
   (set!-val set!-form)
   #:defined-predicate set!-implement?
   #:fast-defaults ((default-representation?
-                     (define (set!? l) (and (non-empty-list? l) (eq? 'set! (car l))))
+                     (define (set!? l) (eq? 'set! (car l)))
                      (define (set!-id f) (check-and-extract-form f (list 'set! id _) id))
                      (define (set!-val f) (check-and-extract-form f (list 'set! _ val) val)))))
 (define-generics lambda-form
@@ -139,7 +139,7 @@
   (lambda-body lambda-form)
   #:defined-predicate lambda-implement?
   #:fast-defaults ((default-representation?
-                     (define (lambda? l) (and (non-empty-list? l) (eq? 'lambda (car l))))
+                     (define (lambda? l) (eq? 'lambda (car l)))
                      (define (lambda-args f) (check-and-extract-form f (list 'lambda (list args ...) _ ...) args))
                      (define (lambda-body f) (check-and-extract-form f (list 'lambda (list _ ...) body ...) body)))))
 (define-generics begin-form
@@ -147,14 +147,14 @@
   (begin-body begin-form)
   #:defined-predicate begin-implement?
   #:fast-defaults ((default-representation?
-                     (define (begin? l) (and (non-empty-list? l) (eq? 'begin (car l))))
+                     (define (begin? l) (eq? 'begin (car l)))
                      (define (begin-body f) (check-and-extract-form f (list 'begin body ...) body)))))
 (define-generics quote-form
   (quote? quote-form)
   (quote-datum quote-form)
   #:defined-predicate quote-implement?
   #:fast-defaults ((default-representation?
-                     (define (quote? l) (and (non-empty-list? l) (eq? 'quote (car l))))
+                     (define (quote? l) (eq? 'quote (car l)))
                      (define (quote-datum f) (check-and-extract-form f (list 'quote datum) datum)))))
 (define-generics if-form
   (if? if-form)
@@ -163,7 +163,7 @@
   (if-second-branch if-form)
   #:defined-predicate if-implement?
   #:fast-defaults ((default-representation?
-                     (define (if? l) (and (non-empty-list? l) (eq? 'if (car l))))
+                     (define (if? l) (eq? 'if (car l)))
                      (define (if-test f) (check-and-extract-form f (list 'if test first second) test))
                      (define (if-first-branch f) (check-and-extract-form f (list 'if test first second) first))
                      (define (if-second-branch f) (check-and-extract-form f (list 'if test first second) second)))))
@@ -175,7 +175,7 @@
   (expression-operand s-exp)
   #:defined-predicate s-exp-implement?
   #:fast-defaults ((default-representation?
-                     (define (expression? l) (and (non-empty-list? l) (not (ormap (lambda (h) (eq? h (car l))) forms))))
+                     (define (expression? l) (not (ormap (lambda (h) (eq? h (car l))) forms)))
                      (define (expression-operator l) (car l))
                      (define (expression-operand l) (cdr l)))))
 
