@@ -90,7 +90,7 @@
 (define (scheme-procedure? v) (or (procedure? v) (__closure? v)))
 ;;Default representation
 (define (default-representation? f)
-  (or (scheme-primitive? f) (null? f) (and (pair? f) (default-representation? (car f)) (default-representation? (cdr f)))))
+  (list? f))
 (define (make-define id val) (list 'define id val))
 (define (make-set! id val) (list 'set! id val))
 (define (make-lambda args body) (cons 'lambda (cons args body)))
