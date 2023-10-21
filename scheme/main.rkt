@@ -92,7 +92,7 @@
 
 ;;Representation
 ;;General predicates
-(define (scheme-self-evaluating? v) (or (exact-integer? v) (boolean? v) (bytes? v) (__void? v)))
+(define (scheme-self-evaluating? v) (or (number? v) (boolean? v) (bytes? v) (__void? v)))
 (define (scheme-variable? v) (symbol? v))
 (define (scheme-procedure? v) (or (__primitive? v) (__closure? v)))
 ;;Default representation
@@ -263,8 +263,8 @@
     (values eval-scheme apply-scheme)))
 
 (module* namespace racket/base
-  (require rackunit racket/list (submod ".."))
-  (provide (all-from-out rackunit racket/list racket/base (submod ".."))))
+  (require rackunit racket/list racket/stream racket/match (submod ".."))
+  (provide (all-from-out rackunit racket/list racket/stream racket/match racket/base (submod ".."))))
 
 (module+ test
   ;; Any code in this `test` submodule runs when this file is run using DrRacket
@@ -275,7 +275,7 @@
 
   ;;Predicates
   (check-true (default-representation? (default:make-expression '+ '(1 2))))
-  (check-false (default-representation? 1.2))
+  (check-true (scheme-self-evaluating? 1.2))
   (check-false (scheme-procedure? +))
   (check-true (scheme-procedure? (make-primitive + 2)))
   (check-true (expression? (default:make-expression '+ '(2 2))))
@@ -327,25 +327,110 @@
   (define-runtime-module-path-index namespace-module '(submod ".." namespace))
   (define-namespace-anchor anchor)
   (define ns (module->namespace namespace-module (namespace-anchor->empty-namespace anchor)))
-  (define benchmark
+  (define benchmark1
     '(begin
-       (define scheme-main
+       (define scheme-traverse
          (time
           (eval-scheme
            '(begin
-              (define reverse (lambda (l r) (if (null? l) r (reverse (cdr l) (cons (car l) r)))))
-              (define map (lambda (proc l r) (if (null? l) (reverse r null) (map proc (cdr l) (cons (proc (car l)) r)))))
-              (lambda (l) (reverse (map add1 l null) null)))
+              (define foldl
+                (lambda (proc init list)
+                  (if (null? list)
+                      init
+                      (foldl proc (proc (car list) init) (cdr list)))))
+              (define reverse (lambda (l) (foldl cons null l)))
+              (define map (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l))))
+              (lambda (l) (reverse (map add1 l))))
            (make-env (list (cons 'cons (make-primitive cons 2))
                            (cons 'car (make-primitive car 1))
                            (cons 'cdr (make-primitive cdr 1))
                            (cons 'null? (make-primitive null? 1))
                            (cons 'null null)
                            (cons 'add1 (make-primitive add1 1)))))))
-       (define racket-main
-         (time (eval '(lambda (l) (reverse (map add1 l))) (make-base-namespace))))
-       (let ((lst (range 0 2000000)))
-         (check-equal? (time (apply-scheme scheme-main (list lst)))
-                       (time (apply racket-main (list lst)))))))
-  (pretty-write benchmark)
-  (eval benchmark ns))
+       (define racket-traverse
+         (time (eval '(lambda (l) (reverse (map add1 l))))))
+       (let ((lst (range 0 200000)))
+         (check-equal? (time (apply-scheme scheme-traverse (list lst)))
+                       (time (apply racket-traverse (list lst)))))))
+  (pretty-write benchmark1)
+  (eval benchmark1 ns)
+  (define benchmark2
+    '(begin
+       (define scheme-pi-stream-1000th
+         (time
+          (eval-scheme
+           '(begin
+              (define foldl
+                (lambda (proc init list)
+                  (if (null? list)
+                      init
+                      (foldl proc (proc (car list) init) (cdr list)))))
+              (define reverse (lambda (l) (foldl cons null l)))
+              (define map (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l))))
+              (define streams-map
+                (lambda (proc sl)
+                  (if (streams-empty? sl)
+                      empty-stream
+                      (cons-stream (apply proc (map stream-car sl)) (streams-map proc (map stream-cdr sl))))))
+              (define stream-ref
+                (lambda (s n)
+                  (if (= n 0)
+                      (stream-car s)
+                      (stream-ref (stream-cdr s) (+ n (- 1))))))
+              (define odds/+- (cons-stream 1 (streams-map (lambda (n) (if (< n 0) (+ (- n) 2) (- (+ n 2)))) (cons odds/+- null))))
+              (define pi-stream
+                (cons-stream (stream-car odds/+-) (streams-map (lambda (o p) (+ (/ 1 o) p)) (cons (stream-cdr odds/+-) (cons pi-stream null)))))
+              (* 4 (stream-ref pi-stream 999)))
+           (make-env (list (cons 'streams-empty? (make-primitive (lambda (l) (ormap null? l)) 1))
+                           (cons 'stream-car (make-primitive car 1))
+                           (cons 'stream-cdr (make-primitive (lambda (s) (apply-scheme (cdr s) null)) 1))
+                           (cons 'empty-stream null)
+                           (cons 'null? (make-primitive null? 1))
+                           (cons 'car (make-primitive car 1))
+                           (cons 'cdr (make-primitive cdr 1))
+                           (cons 'cons (make-primitive cons 2))
+                           (cons '< (make-primitive < 2))
+                           (cons '= (make-primitive = 2))
+                           (cons '/ (make-primitive / 2))
+                           (cons '+ (make-primitive + 2))
+                           (cons '- (make-primitive - 1))
+                           (cons '* (make-primitive * 2))
+                           (cons 'null null)
+                           (cons 'apply (make-primitive apply-scheme 2)))
+                     #:expander (lambda (f c)
+                                  (match f
+                                    ((list 'cons-stream car cdr)
+                                     (c (default:make-expression
+                                          'cons
+                                          (list car
+                                                (default:make-expression
+                                                  (default:make-lambda
+                                                    '(proc)
+                                                    (list
+                                                     (default:make-define 'run? #f)
+                                                     (default:make-define 'result #f)
+                                                     (default:make-lambda
+                                                       '()
+                                                       (list
+                                                        (default:make-if
+                                                          'run?
+                                                          'result
+                                                          (default:make-expression
+                                                            (default:make-lambda '(r) (list (default:make-set! 'result 'r) (default:make-set! 'run? #t) 'r))
+                                                            (list (default:make-expression 'proc null))))))))
+                                                  (list (default:make-lambda '() (list cdr))))))))
+                                    (_ #f)))))))
+       (define racket-pi-stream-1000th
+         (time
+          (eval '(begin
+                   (define (stream-map* proc . sl)
+                     (if (ormap stream-empty? sl)
+                         empty-stream
+                         (stream-cons #:eager (apply proc (map stream-first sl))
+                                      (apply stream-map* proc (map stream-rest sl)))))
+                   (define odds/+- (stream-cons #:eager 1 (stream-map* (lambda (n) (if (< n 0) (+ (- n) 2) (- (+ n 2)))) odds/+-)))
+                   (define pi-stream (stream-cons #:eager (stream-first odds/+-) (stream-map* (lambda (o p) (+ (/ 1 o) p)) (stream-rest odds/+-) pi-stream)))
+                   (* 4 (stream-ref pi-stream 999))))))
+       (check-true (= racket-pi-stream-1000th scheme-pi-stream-1000th))))
+  (pretty-write benchmark2)
+  (eval benchmark2 ns))
