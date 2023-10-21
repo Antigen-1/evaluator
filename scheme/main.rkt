@@ -52,10 +52,8 @@
           #:exists env?
           (make-primitive (-> procedure? exact-nonnegative-integer? any))
           (make-env (->* ((listof (cons/c symbol? any/c))) (#:expander (-> any/c (-> all-implement/c any) any)) env?))
-          (eval-scheme (->
-                        all-implement/c
-                        env?
-                        any))
+          (expand-scheme (-> all-implement/c env? any))
+          (eval-scheme (-> all-implement/c env? any))
           (apply-scheme (-> any/c list? any))))
 
 ;;Exceptions
@@ -121,7 +119,7 @@
     (for ((t (in-list (environment-frames env))))
       (cond ((has-id? t id) (return (proc t id)))))
     (raise (exn:fail:scheme:syntax:unbound (format "~a is not bound" id) (current-continuation-marks)))))
-(define (expand form env) ((environment-expander env) form __expander_box))
+(define (env-expand form env) ((environment-expander env) form __expander_box))
 (define (set-env! env id val) (set-frame! (car (environment-frames env)) id val) _void)
 
 ;;Data-directed dispatching
@@ -218,34 +216,49 @@
 ;;--------------------------
 
 ;;Expansion, evaluation and application
-(define-values (eval-scheme apply-scheme)
-  (letrec ((eval-scheme
-            (lambda (exp env)
-              (cond ((let ((expanded (expand exp env)))
+(define-values (expand-scheme eval-scheme apply-scheme)
+  (letrec ((expand-scheme
+            (lambda (f e)
+              (cond ((let ((expanded (env-expand f e)))
                        (if (__expander_box? expanded)
                            expanded
                            #f))
                      =>
                      ;;You have to handle identifiers yourself
-                     (lambda (e) (eval-scheme (__expander_box-expression e) env)))
-
-                    ((scheme-self-evaluating? exp) exp)
+                     __expander_box-expression)
+                    ((or (scheme-variable? f) (scheme-self-evaluating? f)) f)
+                    ;;Several representations can be mixed
+                    ((if? f) (make-if (expand-scheme (n:if-test f) e)
+                                      (expand-scheme (n:if-first f) e)
+                                      (expand-scheme (n:if-second f) e)))
+                    ((define? f) (make-define (n:define-id f)
+                                              (expand-scheme (n:define-val f) e)))
+                    ((set!? f) (make-set! (n:set!-id f) (expand-scheme (n:set!-val f) e)))
+                    ((begin? f) (make-begin (map (lambda (f) (expand-scheme f e)) (n:begin-body f))))
+                    ((lambda? f) (make-lambda (n:lambda-args f) (map (lambda (f) (expand-scheme f e)) (n:lambda-body f))))
+                    ((quote? f) f)
+                    ((expression? f) (make-expression (expand-scheme (n:expression-operator f) e)
+                                                      (map (lambda (f) (expand-scheme f e)) (n:expression-operand f))))
+                    (else (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" f) (current-continuation-marks)))))))
+           (eval-primitive-form
+            (lambda (exp env)
+              (cond ((scheme-self-evaluating? exp) exp)
                     ((scheme-variable? exp) (refer-env env exp))
 
                     ((if? exp)
-                     (if (eval-scheme (n:if-test exp) env)
-                         (eval-scheme (n:if-first exp) env)
-                         (eval-scheme (n:if-second exp) env)))
+                     (if (eval-primitive-form (n:if-test exp) env)
+                         (eval-primitive-form (n:if-first exp) env)
+                         (eval-primitive-form (n:if-second exp) env)))
                     ((quote? exp) (n:quote-datum exp))
-                    ((begin? exp) (for/fold ((_ _void)) ((e (in-list (n:begin-body exp)))) (eval-scheme e env)))
+                    ((begin? exp) (for/fold ((_ _void)) ((e (in-list (n:begin-body exp)))) (eval-primitive-form e env)))
                     ((lambda? exp) (__closure env (n:lambda-args exp) (n:lambda-body exp)))
                     ((set!? exp)
-                     (refer-env env (n:set!-id exp) #:proc (make-frame-setter (eval-scheme (n:set!-val exp) env))))
+                     (refer-env env (n:set!-id exp) #:proc (make-frame-setter (eval-primitive-form (n:set!-val exp) env))))
                     ((define? exp)
-                     (set-env! env (n:define-id exp) (eval-scheme (n:define-val exp) env)))
+                     (set-env! env (n:define-id exp) (eval-primitive-form (n:define-val exp) env)))
 
-                    ((expression? exp) (apply-scheme (eval-scheme (n:expression-operator exp) env)
-                                                     (map (lambda (e) (eval-scheme e env)) (n:expression-operand exp))))
+                    ((expression? exp) (apply-scheme (eval-primitive-form (n:expression-operator exp) env)
+                                                     (map (lambda (e) (eval-primitive-form e env)) (n:expression-operand exp))))
 
                     (else (raise (exn:fail:scheme:syntax (format "Malformed scheme expression: ~s" exp)) (current-continuation-marks))))))
            (apply-scheme
@@ -258,9 +271,9 @@
                      (define env (add-frame (__closure-env operator) (map* cons #:handler (lambda () (raise-arity (length (__closure-args operator)) (length operand))) (__closure-args operator) operand)))
                      (for/fold ((_ _void))
                                ((ins (in-list (__closure-body operator))))
-                       (eval-scheme ins env)))
+                       (eval-primitive-form ins env)))
                     (else (raise (exn:fail:scheme:application (format "~s is not an applicable object" operator) (current-continuation-marks))))))))
-    (values eval-scheme apply-scheme)))
+    (values expand-scheme (lambda (exp env) (eval-primitive-form (expand-scheme exp env) env)) apply-scheme)))
 
 (module* namespace racket/base
   (require rackunit racket/list racket/stream racket/match (submod ".."))
@@ -321,6 +334,7 @@
      env)
     2))
   (check-true (= (apply-scheme (eval-scheme '(lambda (a) (set! a 1) a) env) (list 0)) 1))
+  (check-equal? (expand-scheme '(or (= 1 2) (= 2 2)) env) '(if (= 1 2) (= 1 2) (if (= 2 2) (= 2 2) #f)))
   (check-true (eval-scheme '(or (= 1 2) (= 2 2)) env))
   (check-true (= 2 (eval-scheme '(or (= 1 2) 2 (= 2 2)) env)))
   ;;Benchmark
