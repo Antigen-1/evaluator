@@ -128,7 +128,6 @@
 ;;--------------------------
 ;;Special forms
 ;;Only syntax are checked here
-(define forms '(define set! lambda begin quote if))
 (define-generics define-form
   (define? define-form)
   (define-id define-form)
@@ -189,7 +188,7 @@
   (expression-operand s-exp)
   #:defined-predicate s-exp-implement?
   #:fast-defaults ((default-representation?
-                     (define (expression? l) (not (ormap (lambda (h) (eq? h (car l))) forms)))
+                     (define (expression? _) #t) ;;A non-empty list can always be considered as an expression
                      (define (expression-operator l) (car l))
                      (define (expression-operand l) (cdr l)))))
 
