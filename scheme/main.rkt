@@ -25,8 +25,12 @@
 (require racket/generic racket/match racket/contract (for-syntax racket/base))
 (provide (struct-out exn:fail:scheme)
          (struct-out exn:fail:scheme:syntax)
+         (struct-out exn:fail:scheme:syntax:primitive)
          (struct-out exn:fail:scheme:syntax:unbound)
          (struct-out exn:fail:scheme:application)
+         (struct-out exn:fail:scheme:application:arity)
+         (struct-out exn:fail:scheme:application:applicable)
+
          (struct-out __void)
 
          scheme-self-evaluating? scheme-variable? scheme-procedure?
@@ -59,34 +63,40 @@
 ;;Exceptions
 (struct exn:fail:scheme exn:fail ())
 (struct exn:fail:scheme:syntax exn:fail:scheme ())
+(struct exn:fail:scheme:syntax:primitive exn:fail:scheme:syntax ())
 (struct exn:fail:scheme:syntax:unbound exn:fail:scheme:syntax ())
 (struct exn:fail:scheme:application exn:fail:scheme ())
 (struct exn:fail:scheme:application:arity exn:fail:scheme:application ())
+(struct exn:fail:scheme:application:applicable exn:fail:scheme:application ())
 
 ;;Macros
 (define-syntax (check-and-extract-form stx)
   (syntax-case stx ()
+    ((_ val (pattern id) ...)
+     #'(match val
+         (pattern id)
+         ...
+         (_ (raise (exn:fail:scheme:syntax:primitive (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))
     ((_ val pattern id)
      #'(match val
          (pattern id)
-         (_ (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))))
+         (_ (raise (exn:fail:scheme:syntax:primitive (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))))
 
 ;;Structures
 (struct __primitive (proc arity) #:property prop:procedure (struct-field-index proc) #:constructor-name make-primitive)
-(struct __closure (env args body))
+(struct __closure (env arity args body))
+(struct __operand (nums list))
 (struct __void ())
 (struct __expander_box (expression))
+(struct __environment (frames expander))
 
 ;;Constants
 (define _void (__void))
 
 ;;Utilities
 (define (non-empty-list? l) (and (list? l) (not (null? l))))
-(define (check-result v pred) (cond ((pred v) v) (else (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" v) (current-continuation-marks))))))
-(define (raise-arity args vals) (raise (exn:fail:scheme:application:arity (format "Arity mismatch:\nexpected: ~s\nactual: ~s" args vals) (current-continuation-marks))))
-(define (map* proc #:handler handler . ll)
-  (cond ((apply = (map length ll)) (apply map proc ll))
-        (else (handler))))
+(define (check-primitive-part n v pred) (cond ((pred v) v) (else (raise (exn:fail:scheme:syntax:primitive (format "Malformed ~a: ~s" n v) (current-continuation-marks))))))
+(define (raise-arity args vals) (raise (exn:fail:scheme:application:arity (format "Arity mismatch:\nexpected: ~a\nactual: ~a" args vals) (current-continuation-marks))))
 
 ;;Representation
 ;;General predicates
@@ -111,16 +121,15 @@
 (define (set-frame! frame id val) (hash-set! frame id val))
 (define (refer-frame frame id) (hash-ref frame id))
 ;;Environments
-(struct environment (frames expander))
-(define (make-env (assocs null) #:expander (expander (lambda _ #f))) (environment (list (make-frame assocs)) expander))
-(define (add-frame env assocs) (struct-copy environment env (frames (cons (make-frame assocs) (environment-frames env)))))
+(define (make-env (assocs null) #:expander (expander (lambda _ #f))) (__environment (list (make-frame assocs)) expander))
+(define (add-frame env assocs) (struct-copy __environment env (frames (cons (make-frame assocs) (__environment-frames env)))))
 (define (refer-env env id #:proc (proc refer-frame))
   (let/cc return
-    (for ((t (in-list (environment-frames env))))
+    (for ((t (in-list (__environment-frames env))))
       (cond ((has-id? t id) (return (proc t id)))))
     (raise (exn:fail:scheme:syntax:unbound (format "~a is not bound" id) (current-continuation-marks)))))
-(define (env-expand form env) ((environment-expander env) form __expander_box))
-(define (set-env! env id val) (set-frame! (car (environment-frames env)) id val) _void)
+(define (env-expand form env) ((__environment-expander env) form __expander_box))
+(define (set-env! env id val) (set-frame! (car (__environment-frames env)) id val) _void)
 
 ;;Data-directed dispatching
 ;;--------------------------
@@ -177,7 +186,7 @@
                      (define (if? l) (eq? 'if (car l)))
                      (define (if-test f) (check-and-extract-form f (list 'if test first second) test))
                      (define (if-first-branch f) (check-and-extract-form f (list 'if test first second) first))
-                     (define (if-second-branch f) (check-and-extract-form f (list 'if test first second) second)))))
+                     (define (if-second-branch f) (check-and-extract-form f ((list 'if test first second) second) ((list 'if test first) #f))))))
 
 ;;Scheme expression
 (define-generics s-exp
@@ -200,20 +209,34 @@
                                s-exp-implement?))
 
 ;;Selectors with result checking
-(define (n:define-id f) (check-result (define-id f) scheme-variable?))
+(define (n:define-id f) (check-primitive-part 'identifier (define-id f) scheme-variable?))
 (define (n:define-val f) (define-val f))
-(define (n:set!-id f) (check-result (set!-id f) scheme-variable?))
+(define (n:set!-id f) (check-primitive-part 'identifier (set!-id f) scheme-variable?))
 (define (n:set!-val f) (set!-val f))
-(define (n:begin-body f) (check-result (begin-body f) list?))
-(define (n:lambda-args f) (check-result (lambda-args f) (listof scheme-variable?)))
-(define (n:lambda-body f) (check-result (lambda-body f) list?))
+(define (n:begin-body f) (check-primitive-part '|begin body| (begin-body f) non-empty-list?))
+(define (n:lambda-args f) (check-primitive-part 'arguments (lambda-args f) (listof scheme-variable?)))
+(define (n:lambda-body f) (check-primitive-part '|lambda body| (lambda-body f) non-empty-list?))
 (define (n:if-test f) (if-test f))
 (define (n:if-first f) (if-first-branch f))
 (define (n:if-second f) (if-second-branch f))
 (define (n:quote-datum f) (quote-datum f))
 (define (n:expression-operator f) (expression-operator f))
-(define (n:expression-operand f) (check-result (expression-operand f) list?))
+(define (n:expression-operand f) (check-primitive-part 'operands (expression-operand f) list?))
 ;;--------------------------
+
+;;Arity handling
+;;Operands
+(define (make-operand lst)
+  (__operand (length lst) lst))
+(define (get-operand-nums o)
+  (if (list? o) (length o) (__operand-nums o)))
+(define (get-operand-list o)
+  (if (list? o) o (__operand-list o)))
+;;Procedures
+(define (make-closure env args body)
+  (__closure env (length args) args body))
+(define (get-procedure-arity p)
+  (if (__primitive? p) (__primitive-arity p) (__closure-arity p)))
 
 ;;Expansion, evaluation and application
 (define-values (expand-scheme eval-scheme apply-scheme)
@@ -239,40 +262,78 @@
                     ((quote? f) f)
                     ((expression? f) (make-expression (expand-scheme (n:expression-operator f) e)
                                                       (map (lambda (f) (expand-scheme f e)) (n:expression-operand f))))
-                    (else (raise (exn:fail:scheme:syntax (format "Malformed scheme form: ~s" f) (current-continuation-marks)))))))
-           (eval-primitive-form
-            (lambda (exp env)
-              (cond ((scheme-self-evaluating? exp) exp)
-                    ((scheme-variable? exp) (refer-env env exp))
+                    (else (raise (exn:fail:scheme:syntax (format "Malformed form: ~s" f) (current-continuation-marks)))))))
+
+           ;;Syntax analysis
+           ;;These functions are not exported
+           (analyze-sequence
+            (lambda (seq)
+              (define (sequentially first then)
+                (lambda (env) (first env) (then env)))
+              (define (loop first rest)
+                (if (null? rest)
+                    first
+                    (loop (sequentially first (car rest))
+                          (cdr rest))))
+              (loop (analyze-primitive-form (car seq)) (map analyze-primitive-form (cdr seq)))))
+           (analyze-primitive-form
+            (lambda (exp)
+              (cond ((scheme-self-evaluating? exp) (lambda (_) exp))
+                    ((scheme-variable? exp) (lambda (env) (refer-env env exp)))
 
                     ((if? exp)
-                     (if (eval-primitive-form (n:if-test exp) env)
-                         (eval-primitive-form (n:if-first exp) env)
-                         (eval-primitive-form (n:if-second exp) env)))
-                    ((quote? exp) (n:quote-datum exp))
-                    ((begin? exp) (for/fold ((_ _void)) ((e (in-list (n:begin-body exp)))) (eval-primitive-form e env)))
-                    ((lambda? exp) (__closure env (n:lambda-args exp) (n:lambda-body exp)))
+                     (define test (analyze-primitive-form (n:if-test exp)))
+                     (define then (analyze-primitive-form (n:if-first exp)))
+                     (define alter (analyze-primitive-form (n:if-second exp)))
+                     (lambda (env)
+                       (if (test env)
+                           (then env)
+                           (alter env))))
+                    ((quote? exp)
+                     (define datum (n:quote-datum exp))
+                     (lambda (_) datum))
+                    ((begin? exp)
+                     (define seq (n:begin-body exp))
+                     (analyze-sequence seq))
+                    ((lambda? exp)
+                     (define args (n:lambda-args exp))
+                     (define body (analyze-sequence (n:lambda-body exp)))
+                     (lambda (env)
+                       (make-closure env args body)))
                     ((set!? exp)
-                     (refer-env env (n:set!-id exp) #:proc (make-frame-setter (eval-primitive-form (n:set!-val exp) env))))
+                     (define id (n:set!-id exp))
+                     (define val (analyze-primitive-form (n:set!-val exp)))
+                     (lambda (env) (refer-env env id #:proc (make-frame-setter (val env)))))
                     ((define? exp)
-                     (set-env! env (n:define-id exp) (eval-primitive-form (n:define-val exp) env)))
+                     (define id (n:define-id exp))
+                     (define val (analyze-primitive-form (n:define-val exp)))
+                     (lambda (env)
+                       (set-env! env id (val env))))
 
-                    ((expression? exp) (apply-scheme (eval-primitive-form (n:expression-operator exp) env)
-                                                     (map (lambda (e) (eval-primitive-form e env)) (n:expression-operand exp))))
+                    ((expression? exp)
+                     (define operator (analyze-primitive-form (n:expression-operator exp)))
+                     (define operand (let ((lst (map analyze-primitive-form (n:expression-operand exp))))
+                                       (make-operand lst)))
+                     (lambda (env)
+                       (apply-scheme (operator env) (map (lambda (o) (o env)) (get-operand-list operand)))))
 
-                    (else (raise (exn:fail:scheme:syntax (format "Malformed scheme expression: ~s" exp)) (current-continuation-marks))))))
+                    (else (raise (exn:fail:scheme:syntax (format "Malformed form: ~s" exp)) (current-continuation-marks))))))
+
+           (eval-primitive-form (lambda (exp env) ((analyze-primitive-form exp) env)))
+
            (apply-scheme
             (lambda (operator operand)
+              ;;Checking
+              (cond ((not (scheme-procedure? operator))
+                     (raise (exn:fail:scheme:application:applicable (format "~s is not an applicable object" operator) (current-continuation-marks))))
+                    ((not (= (get-procedure-arity operator) (get-operand-nums operand)))
+                     (raise-arity (get-procedure-arity operator) (get-operand-nums operand))))
+              ;;Application
               (cond ((__primitive? operator)
-                     (cond ((= (length operand) (__primitive-arity operator))
-                            (apply operator operand))
-                           (else (raise-arity (__primitive-arity operator) (length operand)))))
-                    ((__closure? operator)
-                     (define env (add-frame (__closure-env operator) (map* cons #:handler (lambda () (raise-arity (length (__closure-args operator)) (length operand))) (__closure-args operator) operand)))
-                     (for/fold ((_ _void))
-                               ((ins (in-list (__closure-body operator))))
-                       (eval-primitive-form ins env)))
-                    (else (raise (exn:fail:scheme:application (format "~s is not an applicable object" operator) (current-continuation-marks))))))))
+                     (apply operator (get-operand-list operand)))
+                    (else
+                     (define env (add-frame (__closure-env operator) (map cons (__closure-args operator) (get-operand-list operand))))
+                     ((__closure-body operator) env))))))
     (values expand-scheme (lambda (exp env) (eval-primitive-form (expand-scheme exp env) env)) apply-scheme)))
 
 (module* namespace racket/base
@@ -293,11 +354,11 @@
   (check-true (scheme-procedure? (make-primitive + 2)))
   (check-true (expression? (default:make-expression '+ '(2 2))))
   ;;Exceptions
-  (check-exn exn:fail:scheme:syntax? (lambda () (n:set!-id (default:make-set! '(+ 1 2) 3))))
-  #;(check-exn exn:fail:scheme:syntax? (lambda () (n:begin-body (default:make-begin '((+ 1 2) (define a 1))))))
-  (check-exn exn:fail:scheme:syntax? (lambda () (n:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
+  (check-not-exn (lambda () (expand-scheme (list (list 1)) (make-env null))))
+  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:set!-id (default:make-set! '(+ 1 2) 3))))
+  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
   (check-exn exn:fail:scheme:syntax:unbound? (lambda () (eval-scheme '(+) (make-env null))))
-  (check-exn exn:fail:scheme:application? (lambda () (eval-scheme '(+) (make-env (list (cons '+ 0))))))
+  (check-exn exn:fail:scheme:application:applicable? (lambda () (eval-scheme '(+) (make-env (list (cons '+ 0))))))
   (check-exn exn:fail:scheme:application:arity? (lambda () (eval-scheme '((lambda (n) (+ n 1))) (make-env (list (cons '+ (make-primitive + 2)))))))
   ;;Selectors
   (check-eq? (n:define-id (default:make-define 'a 1)) 'a)
