@@ -83,13 +83,13 @@
          (_ (raise (exn:fail:scheme:syntax:primitive (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))))
 
 ;;Structures
-(struct __primitive (proc arity) #:property prop:procedure (struct-field-index proc) #:constructor-name make-primitive)
+(struct __primitive (proc arity) #:constructor-name make-primitive)
 (struct __closure (env arity args body))
 (struct __operand (num list))
 (struct __void ())
 (struct __expander_box (expression))
 (struct __environment (frames expander))
-(struct __thunk (exp env (arg #:auto) (run? #:auto)) #:mutable #:auto-value #f #:property prop:procedure (lambda (t) ((__thunk-exp t) (__thunk-env t))))
+(struct __thunk (exp env (arg #:auto) (run? #:auto)) #:mutable #:auto-value #f)
 
 ;;Constants
 (define _void (__void))
@@ -251,25 +251,23 @@
 (define (argument-name a)
   (if (scheme-variable? a) a (car a)))
 ;;Thunks
-(define (evaluated-thunk? t)
-  (and (__thunk? t) (__thunk-run? t)))
 (define (delay-it o e)
   (__thunk o e))
 (define (add-arg-to-thunk arg thunk)
   (set-__thunk-arg! thunk arg)
   thunk)
-(define (force-it t)
-  ;;Get the result anyway, no matter whether the argument field is set
+(define (actual-value t) ;;Get the result anyway, no matter whether the argument field is set
+  (define (evaluated-thunk? t) (__thunk-run? t))
   (cond ((evaluated-thunk? t) (__thunk-exp t))
-        ((__thunk? t)
-         (define result (t))
-         (cond ((lazy-memo-argument? (__thunk-arg t))
-                (set-__thunk-run?! t #t)
-                (set-__thunk-exp! t result)
-                ;;Garbage collection
-                (set-__thunk-env! t #f)))
-         result)
-        (else t)))
+        (else (define result ((__thunk-exp t) (__thunk-env t)))
+              (cond ((lazy-memo-argument? (__thunk-arg t))
+                     (set-__thunk-run?! t #t)
+                     (set-__thunk-exp! t result)
+                     ;;Garbage collection
+                     (set-__thunk-env! t #f)))
+              result)))
+(define (force-it v)
+  (if (__thunk? v) (actual-value v) v))
 
 ;;Expansion, evaluation and application
 (define-values (expand-scheme eval-scheme apply-scheme)
@@ -362,8 +360,8 @@
                      (raise-arity (get-procedure-arity operator) (get-operand-nums operand))))
               ;;Application
               (cond ((__primitive? operator)
-                     (apply operator (map force-it (get-operand-list operand))))
-                    ((__thunk? operator) (force-it operator))
+                     (apply (__primitive-proc operator) (map force-it (get-operand-list operand))))
+                    ((__thunk? operator) (actual-value operator))
                     (else
                      (define (cons-arg-val argument delayed)
                        (cons (argument-name argument)
