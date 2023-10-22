@@ -85,10 +85,11 @@
 ;;Structures
 (struct __primitive (proc arity) #:property prop:procedure (struct-field-index proc) #:constructor-name make-primitive)
 (struct __closure (env arity args body))
-(struct __operand (nums list))
+(struct __operand (num list))
 (struct __void ())
 (struct __expander_box (expression))
 (struct __environment (frames expander))
+(struct __thunk (exp env (arg #:auto) (run? #:auto)) #:mutable #:auto-value #f #:property prop:procedure (lambda (t) ((__thunk-exp t) (__thunk-env t))))
 
 ;;Constants
 (define _void (__void))
@@ -102,7 +103,7 @@
 ;;General predicates
 (define (scheme-self-evaluating? v) (or (number? v) (boolean? v) (bytes? v) (__void? v)))
 (define (scheme-variable? v) (symbol? v))
-(define (scheme-procedure? v) (or (__primitive? v) (__closure? v)))
+(define (scheme-procedure? v) (or (__primitive? v) (__closure? v) (__thunk? v)))
 ;;Default representation
 (define (default-representation? f)
   (non-empty-list? f))
@@ -214,7 +215,7 @@
 (define (n:set!-id f) (check-primitive-part 'identifier (set!-id f) scheme-variable?))
 (define (n:set!-val f) (set!-val f))
 (define (n:begin-body f) (check-primitive-part '|begin body| (begin-body f) non-empty-list?))
-(define (n:lambda-args f) (check-primitive-part 'arguments (lambda-args f) (listof scheme-variable?)))
+(define (n:lambda-args f) (check-primitive-part 'arguments (lambda-args f) (listof (or/c scheme-variable? (list/c scheme-variable? (or/c 'lazy 'lazy-memo))))))
 (define (n:lambda-body f) (check-primitive-part '|lambda body| (lambda-body f) non-empty-list?))
 (define (n:if-test f) (if-test f))
 (define (n:if-first f) (if-first-branch f))
@@ -228,15 +229,47 @@
 ;;Operands
 (define (make-operand lst)
   (__operand (length lst) lst))
+(define (map-operand p o)
+  (struct-copy __operand o (list (map p (__operand-list o)))))
 (define (get-operand-nums o)
-  (if (list? o) (length o) (__operand-nums o)))
+  (if (list? o) (length o) (__operand-num o)))
 (define (get-operand-list o)
   (if (list? o) o (__operand-list o)))
 ;;Procedures
 (define (make-closure env args body)
   (__closure env (length args) args body))
 (define (get-procedure-arity p)
-  (if (__primitive? p) (__primitive-arity p) (__closure-arity p)))
+  (cond ((__primitive? p) (__primitive-arity p))
+        ((__closure? p) (__closure-arity p))
+        (else 0)))
+
+;;Argument handling
+(define (lazy-argument? a)
+  (and (list? a) (or (eq? (cadr a) 'lazy) (eq? (cadr a) 'lazy-memo))))
+(define (lazy-memo-argument? a)
+  (and (list? a) (eq? (cadr a) 'lazy-memo)))
+(define (argument-name a)
+  (if (scheme-variable? a) a (car a)))
+;;Thunks
+(define (evaluated-thunk? t)
+  (and (__thunk? t) (__thunk-run? t)))
+(define (delay-it o e)
+  (__thunk o e))
+(define (add-arg-to-thunk arg thunk)
+  (set-__thunk-arg! thunk arg)
+  thunk)
+(define (force-it t)
+  ;;Get the result anyway, no matter whether the argument field is set
+  (cond ((evaluated-thunk? t) (__thunk-exp t))
+        ((__thunk? t)
+         (define result (t))
+         (cond ((lazy-memo-argument? (__thunk-arg t))
+                (set-__thunk-run?! t #t)
+                (set-__thunk-exp! t result)
+                ;;Garbage collection
+                (set-__thunk-env! t #f)))
+         result)
+        (else t)))
 
 ;;Expansion, evaluation and application
 (define-values (expand-scheme eval-scheme apply-scheme)
@@ -312,10 +345,9 @@
 
                     ((expression? exp)
                      (define operator (analyze-primitive-form (n:expression-operator exp)))
-                     (define operand (let ((lst (map analyze-primitive-form (n:expression-operand exp))))
-                                       (make-operand lst)))
+                     (define operand (make-operand (map analyze-primitive-form (n:expression-operand exp))))
                      (lambda (env)
-                       (apply-scheme (operator env) (map (lambda (o) (o env)) (get-operand-list operand)))))
+                       (apply-scheme (operator env) (map-operand (lambda (o) (delay-it o env)) operand))))
 
                     (else (raise (exn:fail:scheme:syntax (format "Malformed form: ~s" exp)) (current-continuation-marks))))))
 
@@ -330,9 +362,17 @@
                      (raise-arity (get-procedure-arity operator) (get-operand-nums operand))))
               ;;Application
               (cond ((__primitive? operator)
-                     (apply operator (get-operand-list operand)))
+                     (apply operator (map force-it (get-operand-list operand))))
+                    ((__thunk? operator) (force-it operator))
                     (else
-                     (define env (add-frame (__closure-env operator) (map cons (__closure-args operator) (get-operand-list operand))))
+                     (define (cons-arg-val argument delayed)
+                       (cons (argument-name argument)
+                             (if (lazy-argument? argument)
+                                 (cond ((__thunk? delayed) (add-arg-to-thunk argument delayed))
+                                       ;;Constants
+                                       (else (add-arg-to-thunk (list (argument-name argument) 'lazy-memo) (delay-it (lambda (_) delayed) #f))))
+                                 (force-it delayed))))
+                     (define env (add-frame (__closure-env operator) (map cons-arg-val (__closure-args operator) (get-operand-list operand))))
                      ((__closure-body operator) env))))))
     (values expand-scheme (lambda (exp env) (eval-primitive-form (expand-scheme exp env) env)) apply-scheme)))
 
@@ -398,6 +438,7 @@
   (check-equal? (expand-scheme '(or (= 1 2) (= 2 2)) env) '(if (= 1 2) (= 1 2) (if (= 2 2) (= 2 2) #f)))
   (check-true (eval-scheme '(or (= 1 2) (= 2 2)) env))
   (check-true (= 2 (eval-scheme '(or (= 1 2) 2 (= 2 2)) env)))
+  (check-true (= 4 (apply-scheme (eval-scheme '(lambda ((v lazy)) (v)) env) (list 4))))
   ;;Benchmark
   (define-runtime-module-path-index namespace-module '(submod ".." namespace))
   (define-namespace-anchor anchor)
@@ -431,7 +472,7 @@
   (eval benchmark1 ns)
   (define benchmark2
     '(begin
-       (define scheme-pi-stream-1000th
+       (define scheme-pi-stream-10000th
          (time
           (eval-scheme
            '(begin
@@ -440,8 +481,21 @@
                   (if (null? list)
                       init
                       (foldl proc (proc (car list) init) (cdr list)))))
+              (define ormap
+                (lambda (proc list)
+                  (if (null? list)
+                      #t
+                      (if (proc (car list)) (ormap proc (cdr list)) #f))))
               (define reverse (lambda (l) (foldl cons null l)))
               (define map (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l))))
+
+              (define cons-stream (lambda (car (cdr lazy-memo)) (cons car cdr)))
+              (define stream-car (lambda (s) (car s)))
+              (define stream-cdr (lambda (s) ((cdr s))))
+              (define empty-stream null)
+              (define streams-empty?
+                (lambda (sl)
+                  (ormap null? sl)))
               (define streams-map
                 (lambda (proc sl)
                   (if (streams-empty? sl)
@@ -452,15 +506,12 @@
                   (if (= n 0)
                       (stream-car s)
                       (stream-ref (stream-cdr s) (+ n (- 1))))))
+
               (define odds/+- (cons-stream 1 (streams-map (lambda (n) (if (< n 0) (+ (- n) 2) (- (+ n 2)))) (cons odds/+- null))))
               (define pi-stream
                 (cons-stream (stream-car odds/+-) (streams-map (lambda (o p) (+ (/ 1 o) p)) (cons (stream-cdr odds/+-) (cons pi-stream null)))))
-              (* 4 (stream-ref pi-stream 999)))
-           (make-env (list (cons 'streams-empty? (make-primitive (lambda (l) (ormap null? l)) 1))
-                           (cons 'stream-car (make-primitive car 1))
-                           (cons 'stream-cdr (make-primitive (lambda (s) (apply-scheme (cdr s) null)) 1))
-                           (cons 'empty-stream null)
-                           (cons 'null? (make-primitive null? 1))
+              (* 4 (stream-ref pi-stream 9999)))
+           (make-env (list (cons 'null? (make-primitive null? 1))
                            (cons 'car (make-primitive car 1))
                            (cons 'cdr (make-primitive cdr 1))
                            (cons 'cons (make-primitive cons 2))
@@ -471,31 +522,8 @@
                            (cons '- (make-primitive - 1))
                            (cons '* (make-primitive * 2))
                            (cons 'null null)
-                           (cons 'apply (make-primitive apply-scheme 2)))
-                     #:expander (lambda (f c)
-                                  (match f
-                                    ((list 'cons-stream car cdr)
-                                     (c (default:make-expression
-                                          'cons
-                                          (list car
-                                                (default:make-expression
-                                                  (default:make-lambda
-                                                    '(proc)
-                                                    (list
-                                                     (default:make-define 'run? #f)
-                                                     (default:make-define 'result #f)
-                                                     (default:make-lambda
-                                                       '()
-                                                       (list
-                                                        (default:make-if
-                                                          'run?
-                                                          'result
-                                                          (default:make-expression
-                                                            (default:make-lambda '(r) (list (default:make-set! 'result 'r) (default:make-set! 'run? #t) 'r))
-                                                            (list (default:make-expression 'proc null))))))))
-                                                  (list (default:make-lambda '() (list cdr))))))))
-                                    (_ #f)))))))
-       (define racket-pi-stream-1000th
+                           (cons 'apply (make-primitive apply-scheme 2)))))))
+       (define racket-pi-stream-10000th
          (time
           (eval '(begin
                    (define (stream-map* proc . sl)
@@ -505,7 +533,7 @@
                                       (apply stream-map* proc (map stream-rest sl)))))
                    (define odds/+- (stream-cons #:eager 1 (stream-map* (lambda (n) (if (< n 0) (+ (- n) 2) (- (+ n 2)))) odds/+-)))
                    (define pi-stream (stream-cons #:eager (stream-first odds/+-) (stream-map* (lambda (o p) (+ (/ 1 o) p)) (stream-rest odds/+-) pi-stream)))
-                   (* 4 (stream-ref pi-stream 999))))))
-       (check-true (= racket-pi-stream-1000th scheme-pi-stream-1000th))))
+                   (* 4 (stream-ref pi-stream 9999))))))
+       (check-true (= racket-pi-stream-10000th scheme-pi-stream-10000th))))
   (pretty-write benchmark2)
   (eval benchmark2 ns))
