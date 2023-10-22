@@ -248,7 +248,7 @@
                            #f))
                      =>
                      ;;You have to handle identifiers yourself
-                     __expander_box-expression)
+                     (lambda (b) (expand-scheme (__expander_box-expression b) e)))
                     ((or (scheme-variable? f) (scheme-self-evaluating? f)) f)
                     ;;Several representations can be mixed
                     ((if? f) (make-if (expand-scheme (n:if-test f) e)
