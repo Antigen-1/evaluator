@@ -55,7 +55,7 @@
          (contract-out
           #:exists env?
           (make-primitive (-> procedure? exact-nonnegative-integer? any))
-          (make-env (->* ((listof (cons/c symbol? any/c))) (#:expander (-> any/c (-> all-implement/c any) any)) env?))
+          (make-optimal-base-environment (->* () ((listof (cons/c symbol? any/c)) #:expander (-> any/c (-> all-implement/c any) any)) env?))
           (make-example-base-environment (-> env?))
           (expand-scheme (-> any/c env? any))
           (eval-scheme (-> any/c env? any))
@@ -137,7 +137,7 @@
   )
 ;;Environments
 (begin-encourage-inline
-  (define (make-env (assocs null) #:expander (expander (lambda _ #f))) (__environment (list (make-frame assocs)) expander))
+  (define (make-env assocs #:expander expander) (__environment (list (make-frame assocs)) expander))
   (define (add-frame env assocs) (struct-copy __environment env (frames (cons (make-frame assocs) (__environment-frames env)))))
   (define (refer-env env id #:proc (proc refer-frame))
     (let/cc return
@@ -319,7 +319,7 @@
 
 ;;Expansion, evaluation and application
 (begin-encourage-inline
-  (define-values (expand-scheme eval-scheme apply-scheme make-example-base-environment)
+  (define-values (expand-scheme eval-scheme apply-scheme make-optimal-base-environment make-example-base-environment)
     (letrec ((expand-scheme
               (lambda (f e)
                 (cond ((let ((expanded (env-expand f e)))
@@ -415,39 +415,65 @@
                       (else
                        (define env (add-frame (__closure-env operator) (map cons-arg-val (__closure-args operator) (get-operand-list operand))))
                        ((__closure-body operator) env)))))
-              (make-example-base-environment
-               (lambda ()
-                 (make-env (list (cons '+ (make-primitive + 2))
-                                 (cons '- (make-primitive - 2))
-                                 (cons '* (make-primitive * 2))
-                                 (cons '/ (make-primitive / 2))
-                                 (cons 'number? (make-primitive number? 1))
-                                 (cons '< (make-primitive < 2))
-                                 (cons '> (make-primitive > 2))
-                                 (cons '= (make-primitive = 2))
-                                 (cons '<= (make-primitive <= 2))
-                                 (cons '>= (make-primitive >= 2))
-                                 (cons 'eq? (make-primitive eq? 2))
-                                 (cons 'car (make-primitive car 1))
-                                 (cons 'cdr (make-primitive cdr 1))
-                                 (cons 'cons (make-primitive cons 2))
-                                 (cons 'null null)
-                                 (cons 'null? (make-primitive null? 1))
-                                 (cons 'eval (make-primitive plain-eval 2))
-                                 (cons 'apply (make-primitive plain-apply 2))
-                                 (cons 'list->bytes (make-primitive list->bytes 1))
-                                 (cons 'bytes->list (make-primitive bytes->list 1))
-                                 (cons 'bytes=? (make-primitive bytes=? 2))
-                                 (cons 'bytes>? (make-primitive bytes>? 2))
-                                 (cons 'bytes<? (make-primitive bytes<? 2))
-                                 (cons 'bytes-ref (make-primitive bytes-ref 2))
-                                 ;;Renamed
-                                 (cons 'make-base-environment (make-primitive make-example-base-environment 0)))))))
+
+             (fixed-bindings
+              (list
+               (cons 'apply (make-primitive plain-apply 2))
+               (cons 'eval (make-primitive plain-eval 2))
+               (cons 'expand (make-primitive expand-scheme 2))))
+             (make-optimal-base-environment
+              (lambda ((assoc null) #:expander (expander (lambda _ #f)))
+                (make-env
+                 #:expander expander
+                 (cons (cons 'make-base-environment (make-primitive (lambda () (make-optimal-base-environment assoc #:expander expander)) 0))
+                       (append fixed-bindings assoc)))))
+             (make-example-base-environment
+              (lambda ()
+                (make-optimal-base-environment
+                 (list (cons '+ (make-primitive + 2))
+                       (cons '- (make-primitive - 2))
+                       (cons '* (make-primitive * 2))
+                       (cons '/ (make-primitive / 2))
+                       (cons 'number? (make-primitive number? 1))
+                       (cons '< (make-primitive < 2))
+                       (cons '> (make-primitive > 2))
+                       (cons '= (make-primitive = 2))
+                       (cons '<= (make-primitive <= 2))
+                       (cons '>= (make-primitive >= 2))
+                       (cons 'eq? (make-primitive eq? 2))
+                       (cons 'car (make-primitive car 1))
+                       (cons 'cdr (make-primitive cdr 1))
+                       (cons 'cons (make-primitive cons 2))
+                       (cons 'null null)
+                       (cons 'null? (make-primitive null? 1))
+                       (cons 'list? (make-primitive list? 1))
+                       (cons 'bytes? (make-primitive bytes? 1))
+                       (cons 'list->bytes (make-primitive list->bytes 1))
+                       (cons 'bytes->list (make-primitive bytes->list 1))
+                       (cons 'bytes=? (make-primitive bytes=? 2))
+                       (cons 'bytes>? (make-primitive bytes>? 2))
+                       (cons 'bytes<? (make-primitive bytes<? 2))
+                       (cons 'bytes-ref (make-primitive bytes-ref 2))
+                       ;;Renamed
+                       (cons 'void (make-primitive __void 0))
+                       (cons 'void? (make-primitive __void? 1))
+                       )
+                 #:expander
+                 (lambda (exp c)
+                   (define (make-let assoc body)
+                     (cons 'let (cons assoc body)))
+                   (match exp
+                     ((list 'let (list (list id expr) ...) body ...)
+                      (c (make-expression (make-lambda id body) expr)))
+                     ((list 'let* (list assoc ...) body ...)
+                      (c (car (foldl (lambda (a b) (list (make-let (list a) b))) body (reverse assoc)))))
+                     (_ #f)))))))
       (values expand-scheme
               (lambda (exp env)
                 (contract-monitor (plain-eval exp env)))
               (lambda (operator operand)
                 (contract-monitor (plain-apply operator operand)))
+              make-optimal-base-environment
               make-example-base-environment)))
   )
 
@@ -469,36 +495,19 @@
   (check-true (scheme-procedure? (make-primitive + 2)))
   (check-true (expression? (default:make-expression '+ '(2 2))))
   ;;Exceptions
-  (check-not-exn (lambda () (expand-scheme (list (list 1)) (make-env null))))
+  (check-not-exn (lambda () (expand-scheme (list (list 1)) (make-optimal-base-environment))))
   (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:set!-id (default:make-set! '(+ 1 2) 3))))
   (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
-  (check-exn exn:fail:scheme:syntax:unbound? (lambda () (eval-scheme '(+) (make-env null))))
-  (check-exn exn:fail:scheme:contract:applicable? (lambda () (eval-scheme '(+) (make-env (list (cons '+ 0))))))
-  (check-exn exn:fail:scheme:contract:arity? (lambda () (eval-scheme '((lambda (n) (+ n 1))) (make-env (list (cons '+ (make-primitive + 2)))))))
-  (check-exn exn:fail:scheme:contract? (lambda () (eval-scheme '(+ "") (make-env (list (cons '+ (make-primitive + 1)))))))
+  (check-exn exn:fail:scheme:syntax:unbound? (lambda () (eval-scheme '(+) (make-optimal-base-environment))))
+  (check-exn exn:fail:scheme:contract:applicable? (lambda () (eval-scheme '(+) (make-optimal-base-environment (list (cons '+ 0))))))
+  (check-exn exn:fail:scheme:contract:arity? (lambda () (eval-scheme '((lambda (n) (+ n 1))) (make-optimal-base-environment (list (cons '+ (make-primitive + 2)))))))
+  (check-exn exn:fail:scheme:contract? (lambda () (eval-scheme '(+ "") (make-optimal-base-environment (list (cons '+ (make-primitive + 1)))))))
   ;;Selectors
   (check-eq? (n:define-id (default:make-define 'a 1)) 'a)
   (check-equal? (n:if-test (default:make-if '(+ 1 2) 1 2)) '(+ 1 2))
   (check-equal? (n:quote-datum (default:make-quote '(1 . 2))) '(1 . 2))
   ;;Expansion, evaluation and application
-  (define (or-matcher exp cons)
-    (match exp
-      ((list 'or clauses ...)
-       (cons (foldl (lambda (c i) (default:make-if c c i)) #f (reverse clauses))))
-      (_ #f)))
-  (define env (make-env (list
-                         (cons '+ (make-primitive + 2))
-                         (cons '* (make-primitive * 2))
-                         (cons '/ (make-primitive / 2))
-                         (cons '= (make-primitive = 2))
-                         (cons 'car (make-primitive car 1))
-                         (cons 'cdr (make-primitive cdr 1))
-                         (cons 'cons (make-primitive cons 2))
-                         (cons 'list (make-primitive list 2))
-                         (cons 'null null)
-                         (cons 'null? (make-primitive null? 1))
-                         (cons 'apply (make-primitive apply-scheme 2)))
-                        #:expander or-matcher))
+  (define env (make-example-base-environment))
   (check-true
    (=
     (eval-scheme
@@ -507,13 +516,12 @@
                       (if (null? l)
                           null
                           (cons (proc (car l)) (map proc (cdr l))))))
-        (apply + (map (lambda (v) (* v (+ v -1))) (list 1 2))))
+        (apply + (map (lambda (v) (* v (+ v -1))) '(1 2))))
      env)
     2))
   (check-true (= (apply-scheme (eval-scheme '(lambda (a) (set! a 1) a) env) (list 0)) 1))
-  (check-equal? (expand-scheme '(or (= 1 2) (= 2 2)) env) '(if (= 1 2) (= 1 2) (if (= 2 2) (= 2 2) #f)))
-  (check-true (eval-scheme '(or (= 1 2) (= 2 2)) env))
-  (check-true (= 2 (eval-scheme '(or (= 1 2) 2 (= 2 2)) env)))
+  (check-equal? (expand-scheme '(let ((a 1)) (+ a 1)) env) '((lambda (a) (+ a 1)) 1))
+  (check-equal? (expand-scheme '(let* ((a 1) (b (+ a 1))) (+ a b)) env) '((lambda (a) ((lambda (b) (+ a b)) (+ a 1))) 1))
   (check-true (= 4 (apply-scheme (eval-scheme '(lambda ((v lazy)) (v)) env) (list 4))))
   ;;Benchmark
   (define-runtime-module-path-index namespace-module '(submod ".." namespace))
