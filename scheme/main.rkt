@@ -56,6 +56,7 @@
           #:exists env?
           (make-primitive (-> procedure? exact-nonnegative-integer? any))
           (make-env (->* ((listof (cons/c symbol? any/c))) (#:expander (-> any/c (-> all-implement/c any) any)) env?))
+          (make-example-base-environment (-> env?))
           (expand-scheme (-> any/c env? any))
           (eval-scheme (-> any/c env? any))
           (apply-scheme (-> any/c list? any))))
@@ -318,7 +319,7 @@
 
 ;;Expansion, evaluation and application
 (begin-encourage-inline
-  (define-values (expand-scheme eval-scheme apply-scheme)
+  (define-values (expand-scheme eval-scheme apply-scheme make-example-base-environment)
     (letrec ((expand-scheme
               (lambda (f e)
                 (cond ((let ((expanded (env-expand f e)))
@@ -398,6 +399,7 @@
                       (else (raise (exn:fail:scheme:syntax (format "Malformed form: ~s" exp)) (current-continuation-marks))))))
 
              (eval-primitive-form (lambda (exp env) ((analyze-primitive-form exp) env)))
+             (plain-eval (lambda (exp env) (eval-primitive-form (expand-scheme exp env) env)))
 
              (plain-apply
               (lambda (operator operand)
@@ -412,12 +414,41 @@
                       ((__thunk? operator) (actual-value operator)) ;;These thunks always have their arg fields set
                       (else
                        (define env (add-frame (__closure-env operator) (map cons-arg-val (__closure-args operator) (get-operand-list operand))))
-                       ((__closure-body operator) env))))))
+                       ((__closure-body operator) env)))))
+              (make-example-base-environment
+               (lambda ()
+                 (make-env (list (cons '+ (make-primitive + 2))
+                                 (cons '- (make-primitive - 2))
+                                 (cons '* (make-primitive * 2))
+                                 (cons '/ (make-primitive / 2))
+                                 (cons 'number? (make-primitive number? 1))
+                                 (cons '< (make-primitive < 2))
+                                 (cons '> (make-primitive > 2))
+                                 (cons '= (make-primitive = 2))
+                                 (cons '<= (make-primitive <= 2))
+                                 (cons '>= (make-primitive >= 2))
+                                 (cons 'eq? (make-primitive eq? 2))
+                                 (cons 'car (make-primitive car 1))
+                                 (cons 'cdr (make-primitive cdr 1))
+                                 (cons 'cons (make-primitive cons 2))
+                                 (cons 'null null)
+                                 (cons 'null? (make-primitive null? 1))
+                                 (cons 'eval (make-primitive plain-eval 2))
+                                 (cons 'apply (make-primitive plain-apply 2))
+                                 (cons 'list->bytes (make-primitive list->bytes 1))
+                                 (cons 'bytes->list (make-primitive bytes->list 1))
+                                 (cons 'bytes=? (make-primitive bytes=? 2))
+                                 (cons 'bytes>? (make-primitive bytes>? 2))
+                                 (cons 'bytes<? (make-primitive bytes<? 2))
+                                 (cons 'bytes-ref (make-primitive bytes-ref 2))
+                                 ;;Renamed
+                                 (cons 'make-base-environment (make-primitive make-example-base-environment 0)))))))
       (values expand-scheme
               (lambda (exp env)
-                (contract-monitor (eval-primitive-form (expand-scheme exp env) env)))
+                (contract-monitor (plain-eval exp env)))
               (lambda (operator operand)
-                (contract-monitor (plain-apply operator operand))))))
+                (contract-monitor (plain-apply operator operand)))
+              make-example-base-environment)))
   )
 
 (module* namespace racket/base
@@ -501,13 +532,9 @@
                       (foldl proc (proc (car list) init) (cdr list)))))
               (define reverse (lambda (l) (foldl cons null l)))
               (define map (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l))))
+              (define add1 (lambda (n) (+ n 1)))
               (lambda (l) (reverse (map add1 l))))
-           (make-env (list (cons 'cons (make-primitive cons 2))
-                           (cons 'car (make-primitive car 1))
-                           (cons 'cdr (make-primitive cdr 1))
-                           (cons 'null? (make-primitive null? 1))
-                           (cons 'null null)
-                           (cons 'add1 (make-primitive add1 1)))))))
+           (make-example-base-environment))))
        (define racket-traverse
          (time (eval '(lambda (l) (reverse (map add1 l))))))
        (let ((lst (range 0 200000)))
@@ -550,24 +577,13 @@
                 (lambda (s n)
                   (if (= n 0)
                       (stream-car s)
-                      (stream-ref (stream-cdr s) (+ n (- 1))))))
+                      (stream-ref (stream-cdr s) (- n 1)))))
 
-              (define odds/+- (cons-stream 1 (streams-map (lambda (n) (if (< n 0) (+ (- n) 2) (- (+ n 2)))) (cons odds/+- null))))
+              (define odds/+- (cons-stream 1 (streams-map (lambda (n) (if (< n 0) (+ (- 0 n) 2) (- 0 (+ n 2)))) (cons odds/+- null))))
               (define pi-stream
                 (cons-stream (stream-car odds/+-) (streams-map (lambda (o p) (+ (/ 1 o) p)) (cons (stream-cdr odds/+-) (cons pi-stream null)))))
               (* 4 (stream-ref pi-stream 9999)))
-           (make-env (list (cons 'null? (make-primitive null? 1))
-                           (cons 'car (make-primitive car 1))
-                           (cons 'cdr (make-primitive cdr 1))
-                           (cons 'cons (make-primitive cons 2))
-                           (cons '< (make-primitive < 2))
-                           (cons '= (make-primitive = 2))
-                           (cons '/ (make-primitive / 2))
-                           (cons '+ (make-primitive + 2))
-                           (cons '- (make-primitive - 1))
-                           (cons '* (make-primitive * 2))
-                           (cons 'null null)
-                           (cons 'apply (make-primitive apply-scheme 2)))))))
+           (make-example-base-environment))))
        (define racket-pi-stream-10000th
          (time
           (eval '(begin
