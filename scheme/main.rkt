@@ -243,31 +243,51 @@
         ((__closure? p) (__closure-arity p))
         (else 0)))
 
-;;Argument handling
-(define (lazy-argument? a)
-  (and (list? a) (or (eq? (cadr a) 'lazy) (eq? (cadr a) 'lazy-memo))))
-(define (lazy-memo-argument? a)
-  (and (list? a) (eq? (cadr a) 'lazy-memo)))
-(define (argument-name a)
-  (if (scheme-variable? a) a (car a)))
 ;;Thunks
+;;All operands are delayed by the analyzer, while arg fields are not set
+;;They are then passed to apply-scheme, and forced or set in terms of arguments
+;;But the evaluator can return thunks as well, in which arg fields are set
+;;These thunks are considered as first class values, just like closures and other literal values
+;;These values are delayed as constants by apply-scheme if they are treated as lazy arguments
 (define (delay-it o e)
   (__thunk o e))
-(define (add-arg-to-thunk arg thunk)
-  (set-__thunk-arg! thunk arg)
-  thunk)
-(define (actual-value t) ;;Get the result anyway, no matter whether the argument field is set
+(define (delay-constant c)
+  (define new (delay-it (lambda (_) c) #f))
+  (set-__thunk-arg! new (list 'constant 'lazy-memo))
+  new)
+(define (thunk-arg-set? thunk) (__thunk-arg thunk))
+(define (actual-value t)
   (define (evaluated-thunk? t) (__thunk-run? t))
+  (define (lazy-memo-argument? a) (and (list? a) (eq? (cadr a) 'lazy-memo)))
+  ;;Get the result anyway, no matter whether the argument field is set
   (cond ((evaluated-thunk? t) (__thunk-exp t))
         (else (define result ((__thunk-exp t) (__thunk-env t)))
               (cond ((lazy-memo-argument? (__thunk-arg t))
+                     ;;Garbage collection
+                     (set-__thunk-arg! t #t)
                      (set-__thunk-run?! t #t)
                      (set-__thunk-exp! t result)
-                     ;;Garbage collection
                      (set-__thunk-env! t #f)))
               result)))
 (define (force-it v)
-  (if (__thunk? v) (actual-value v) v))
+  ;;Only thunks without their arg fields set, which are produced by the analyzer, are executed
+  (if (and (__thunk? v) (not (thunk-arg-set? v))) (actual-value v) v))
+(define (cons-arg-val argument delayed)
+  (define (lazy-argument? a) (and (list? a) (or (eq? (cadr a) 'lazy) (eq? (cadr a) 'lazy-memo))))
+  (define (argument-name a) (if (scheme-variable? a) a (car a)))
+  (define (add-arg-to-thunk arg thunk)
+    ;;Thunks with arg field set are treated as simple constants and delayed again
+    (cond
+      ((thunk-arg-set? thunk) (delay-constant thunk))
+      (else
+       (set-__thunk-arg! thunk arg)
+       thunk)))
+  ;;Argument name-value association
+  (cons (argument-name argument)
+        (if (lazy-argument? argument)
+            (cond ((__thunk? delayed) (add-arg-to-thunk argument delayed))
+                  (else (delay-constant delayed)))
+            (force-it delayed))))
 
 ;;Expansion, evaluation and application
 (define-values (expand-scheme eval-scheme apply-scheme)
@@ -361,15 +381,8 @@
               ;;Application
               (cond ((__primitive? operator)
                      (apply (__primitive-proc operator) (map force-it (get-operand-list operand))))
-                    ((__thunk? operator) (actual-value operator))
+                    ((__thunk? operator) (actual-value operator)) ;;These thunks always have their arg fields set
                     (else
-                     (define (cons-arg-val argument delayed)
-                       (cons (argument-name argument)
-                             (if (lazy-argument? argument)
-                                 (cond ((__thunk? delayed) (add-arg-to-thunk argument delayed))
-                                       ;;Constants
-                                       (else (add-arg-to-thunk (list (argument-name argument) 'lazy-memo) (delay-it (lambda (_) delayed) #f))))
-                                 (force-it delayed))))
                      (define env (add-frame (__closure-env operator) (map cons-arg-val (__closure-args operator) (get-operand-list operand))))
                      ((__closure-body operator) env))))))
     (values expand-scheme (lambda (exp env) (eval-primitive-form (expand-scheme exp env) env)) apply-scheme)))
