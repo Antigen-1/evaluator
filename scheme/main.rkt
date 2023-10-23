@@ -56,8 +56,8 @@
           #:exists env?
           (make-primitive (-> procedure? exact-nonnegative-integer? any))
           (make-env (->* ((listof (cons/c symbol? any/c))) (#:expander (-> any/c (-> all-implement/c any) any)) env?))
-          (expand-scheme (-> all-implement/c env? any))
-          (eval-scheme (-> all-implement/c env? any))
+          (expand-scheme (-> any/c env? any))
+          (eval-scheme (-> any/c env? any))
           (apply-scheme (-> any/c list? any))))
 
 ;;Exceptions
