@@ -59,7 +59,7 @@
           (make-example-base-environment (-> env?))
           (expand-scheme (-> any/c env? any))
           (eval-scheme (-> any/c env? any))
-          (apply-scheme (-> any/c list? any))))
+          (apply-scheme (-> any/c any/c any))))
 
 ;;Exceptions
 (begin-encourage-inline
@@ -246,15 +246,15 @@
 
 ;;Arity handling
 (begin-encourage-inline
-  ;;Operands
+  ;;Arguments
+  (define (arguments? v)
+    (or (list? v) (__operand? v)))
+  (define (get-arguments-num-list o)
+    (if (list? o) (values (length o) o) (values (__operand-num o) (__operand-list o))))
   (define (make-operand lst)
     (__operand (length lst) lst))
   (define (map-operand p o)
     (struct-copy __operand o (list (map p (__operand-list o)))))
-  (define (get-operand-nums o)
-    (if (list? o) (length o) (__operand-num o)))
-  (define (get-operand-list o)
-    (if (list? o) o (__operand-list o)))
   ;;Procedures
   (define (make-closure env args body)
     (__closure env (length args) args body))
@@ -399,16 +399,20 @@
              (plain-apply
               (lambda (operator operand)
                 ;;Checking
+                (define-values (operand-num operand-list)
+                  (cond ((arguments? operand) (get-arguments-num-list operand))
+                        (else (raise (exn:fail:scheme:contract (format "~s cannot be supplied as by-position arguments" operand))))))
                 (cond ((not (scheme-procedure? operator))
                        (raise (exn:fail:scheme:contract:applicable (format "~s is not an applicable object" operator) (current-continuation-marks))))
-                      ((not (= (get-procedure-arity operator) (get-operand-nums operand)))
-                       (raise-arity (get-procedure-arity operator) (get-operand-nums operand))))
+                      ((not (= (get-procedure-arity operator) operand-num))
+                       (raise-arity (get-procedure-arity operator) operand-num)))
+                (cond ((not (or (__operand? operand) (list? operand)))))
                 ;;Application
                 (cond ((__primitive? operator)
-                       (apply (__primitive-proc operator) (map force-it (get-operand-list operand))))
+                       (apply (__primitive-proc operator) (map force-it operand-list)))
                       ((__thunk? operator) (actual-value operator)) ;;These thunks always have their arg fields set
                       (else
-                       (define env (add-frame (__closure-env operator) (map cons-arg-val (__closure-args operator) (get-operand-list operand))))
+                       (define env (add-frame (__closure-env operator) (map cons-arg-val (__closure-args operator) operand-list)))
                        ((__closure-body operator) env)))))
 
              ;;Exported environment constructors
