@@ -52,14 +52,14 @@
          gen:lambda-form
          gen:s-exp
 
+         make-example-base-environment
+         eval-scheme
+         expand-scheme
+         apply-scheme
          (contract-out
-          #:exists env?
           (make-primitive (-> procedure? exact-nonnegative-integer? any))
-          (make-optimal-base-environment (->* () ((listof (cons/c symbol? any/c)) #:expander (-> any/c (-> all-implement/c any) any)) env?))
-          (make-example-base-environment (-> env?))
-          (expand-scheme (-> any/c env? any))
-          (eval-scheme (-> any/c env? any))
-          (apply-scheme (-> any/c any/c any))))
+          (make-optimal-base-environment (->* () ((listof (cons/c symbol? any/c)) #:expander (-> any/c (-> all-implement/c any) any)) any))
+          ))
 
 ;;Exceptions
 (begin-encourage-inline
@@ -316,8 +316,11 @@
 (begin-encourage-inline
   (define-values (expand-scheme eval-scheme apply-scheme make-optimal-base-environment make-example-base-environment)
     (letrec ((expand-scheme
-              ;;Expand derived expressions and transform all kinds of representations into the default representation
               (lambda (f e)
+                ;;Checking
+                (cond ((not (__environment? e))
+                       (raise (exn:fail:scheme:contract (format "~s is not an environment value" e) (current-continuation-marks)))))
+                ;;Expand derived expressions and transform all kinds of representations into the default representation
                 (cond ((let ((expanded (env-expand f e)))
                          (if (__expander_box? expanded)
                              expanded
@@ -401,7 +404,7 @@
                 ;;Checking
                 (define-values (operand-num operand-list)
                   (cond ((arguments? operand) (get-arguments-num-list operand))
-                        (else (raise (exn:fail:scheme:contract (format "~s cannot be supplied as by-position arguments" operand))))))
+                        (else (raise (exn:fail:scheme:contract (format "~s cannot be supplied as by-position arguments" operand) (current-continuation-marks))))))
                 (cond ((not (scheme-procedure? operator))
                        (raise (exn:fail:scheme:contract:applicable (format "~s is not an applicable object" operator) (current-continuation-marks))))
                       ((not (= (get-procedure-arity operator) operand-num))
@@ -423,10 +426,13 @@
                (cons 'expand (make-primitive expand-scheme 2))))
              (make-optimal-base-environment
               (lambda ((assoc null) #:expander (expander (lambda _ #f)))
-                (make-env
-                 #:expander expander
-                 (cons (cons 'make-base-environment (make-primitive (lambda () (make-optimal-base-environment assoc #:expander expander)) 0))
-                       (append fixed-bindings assoc)))))
+                (define new
+                  (make-env
+                   #:expander expander
+                   (cons (cons 'make-base-environment (make-primitive (lambda () (make-optimal-base-environment assoc #:expander expander)) 0))
+                         (cons (cons 'current-environment (make-primitive (lambda () new) 0))
+                               (append fixed-bindings assoc)))))
+                new))
              (more-fixed-bindings
               (list (cons '+ (make-primitive + 2))
                     (cons '- (make-primitive - 2))
