@@ -515,6 +515,9 @@
   (check-exn exn:fail:scheme:contract:applicable? (lambda () (eval-scheme '(+) (make-optimal-base-environment (list (cons '+ 0))))))
   (check-exn exn:fail:scheme:contract:arity? (lambda () (eval-scheme '((lambda (n) (+ n 1))) (make-optimal-base-environment (list (cons '+ (make-primitive + 2)))))))
   (check-exn exn:fail:scheme:contract? (lambda () (eval-scheme '(+ "") (make-optimal-base-environment (list (cons '+ (make-primitive + 1)))))))
+  (check-exn exn:fail:scheme:contract? (lambda () (eval-scheme '(+ 1 2) null)))
+  (check-exn exn:fail:scheme:contract? (lambda () (expand-scheme '(+ 1 2) null)))
+  (check-exn exn:fail:scheme:contract? (lambda () (apply-scheme (eval-scheme '(lambda () 1) (make-example-base-environment)) (vector))))
   ;;Selectors
   (check-eq? (n:define-id (default:make-define 'a 1)) 'a)
   (check-equal? (n:if-test (default:make-if '(+ 1 2) 1 2)) '(+ 1 2))
