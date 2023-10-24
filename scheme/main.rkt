@@ -531,6 +531,8 @@
   (check-equal? (expand-scheme '(let ((a 1)) (+ a 1)) env) '((lambda (a) (+ a 1)) 1))
   (check-equal? (expand-scheme '(let* ((a 1) (b (+ a 1))) (+ a b)) env) '((lambda (a) ((lambda (b) (+ a b)) (+ a 1))) 1))
   (check-true (= 4 (apply-scheme (eval-scheme '(lambda ((v lazy)) (v)) env) (list 4))))
+  (check-equal? (eval-scheme '(eval '(map (lambda (n) (+ n 1)) '(1 2)) (current-environment)) env) '(2 3))
+  (check-true (= (eval-scheme '(eval '((lambda (n) (+ n 1)) 1) (make-base-environment)) env) 2))
   ;;Benchmark
   (define-runtime-module-path-index namespace-module '(submod ".." namespace))
   (define-namespace-anchor anchor)
