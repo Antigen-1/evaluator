@@ -315,11 +315,8 @@
 ;;Expansion, evaluation and application
 (begin-encourage-inline
   (define-values (expand-scheme eval-scheme apply-scheme make-optimal-base-environment make-example-base-environment)
-    (letrec ((expand-scheme
+    (letrec ((plain-expand
               (lambda (f e)
-                ;;Checking
-                (cond ((not (__environment? e))
-                       (raise (exn:fail:scheme:contract (format "~s is not an environment value" e) (current-continuation-marks)))))
                 ;;Expand derived expressions and transform all kinds of representations into the default representation
                 (cond ((let ((expanded (env-expand f e)))
                          (if (__expander_box? expanded)
@@ -327,20 +324,26 @@
                              #f))
                        =>
                        ;;You have to handle identifiers yourself
-                       (lambda (b) (expand-scheme (__expander_box-expression b) e)))
+                       (lambda (b) (plain-expand (__expander_box-expression b) e)))
                       ((or (scheme-variable? f) (scheme-self-evaluating? f)) f)
-                      ((if? f) (make-if (expand-scheme (n:if-test f) e)
-                                        (expand-scheme (n:if-first f) e)
-                                        (expand-scheme (n:if-second f) e)))
+                      ((if? f) (make-if (plain-expand (n:if-test f) e)
+                                        (plain-expand (n:if-first f) e)
+                                        (plain-expand (n:if-second f) e)))
                       ((define? f) (make-define (n:define-id f)
-                                                (expand-scheme (n:define-val f) e)))
-                      ((set!? f) (make-set! (n:set!-id f) (expand-scheme (n:set!-val f) e)))
-                      ((begin? f) (make-begin (map (lambda (f) (expand-scheme f e)) (n:begin-body f))))
-                      ((lambda? f) (make-lambda (n:lambda-args f) (map (lambda (f) (expand-scheme f e)) (n:lambda-body f))))
+                                                (plain-expand (n:define-val f) e)))
+                      ((set!? f) (make-set! (n:set!-id f) (plain-expand (n:set!-val f) e)))
+                      ((begin? f) (make-begin (map (lambda (f) (plain-expand f e)) (n:begin-body f))))
+                      ((lambda? f) (make-lambda (n:lambda-args f) (map (lambda (f) (plain-expand f e)) (n:lambda-body f))))
                       ((quote? f) f)
-                      ((expression? f) (make-expression (expand-scheme (n:expression-operator f) e)
-                                                        (map (lambda (f) (expand-scheme f e)) (n:expression-operand f))))
+                      ((expression? f) (make-expression (plain-expand (n:expression-operator f) e)
+                                                        (map (lambda (f) (plain-expand f e)) (n:expression-operand f))))
                       (else (raise (exn:fail:scheme:syntax (format "Malformed form: ~s" f) (current-continuation-marks)))))))
+             (expand-scheme
+              (lambda (f e)
+                ;;Checking
+                (cond ((not (__environment? e)) (raise (exn:fail:scheme:contract (format "~s is not an environment value" e) (current-continuation-marks)))))
+                ;;Expansion
+                (plain-expand f e)))
 
              ;;Syntax analysis
              ;;These functions are not exported
@@ -473,6 +476,8 @@
                    (c (car (foldl (lambda (a b) (list (make-let (list a) b))) body (reverse assoc)))))
                   ((list 'letrec (list (list id expr) ...) body ...)
                    (c (make-let null (cons (make-begin (map (lambda (i e) (make-define i e)) id expr)) body))))
+                  ((list 'define (cons name args) body ...)
+                   (c (make-define name (make-lambda args body))))
                   (_ #f))))
              (make-example-base-environment
               (lambda () (make-optimal-base-environment more-fixed-bindings #:expander example-expander))))
@@ -533,6 +538,7 @@
   (check-true (= 4 (apply-scheme (eval-scheme '(lambda ((v lazy)) (v)) env) (list 4))))
   (check-equal? (eval-scheme '(eval '(map (lambda (n) (+ n 1)) '(1 2)) (current-environment)) env) '(2 3))
   (check-true (= (eval-scheme '(eval '((lambda (n) (+ n 1)) 1) (make-base-environment)) env) 2))
+  (check-true (= (eval-scheme '(begin (define (add1 n) (+ n 1)) (add1 1)) env) 2))
   ;;Benchmark
   (define-runtime-module-path-index namespace-module '(submod ".." namespace))
   (define-namespace-anchor anchor)
