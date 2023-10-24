@@ -92,7 +92,7 @@
 (begin-encourage-inline
   (struct __primitive (proc arity) #:constructor-name make-primitive)
   (struct __closure (env arity args body))
-  (struct __operand (num list))
+  (struct __operands (num list))
   (struct __void ())
   (struct __expander_box (expression))
   (struct __environment (frames expander))
@@ -124,7 +124,7 @@
   (define (make-begin body) (cons 'begin body))
   (define (make-quote datum) (list 'quote datum))
   (define (make-if test first second) (list 'if test first second))
-  (define (make-expression operator operand) (cons operator operand))
+  (define (make-expression operator operands) (cons operator operands))
   )
 
 ;;Basic evironments and environment frames operations
@@ -209,12 +209,12 @@
   (define-generics s-exp
     (expression? s-exp)
     (expression-operator s-exp)
-    (expression-operand s-exp)
+    (expression-operands s-exp)
     #:defined-predicate s-exp-implement?
     #:fast-defaults ((default-representation?
                        (define (expression? _) #t) ;;A non-empty list can always be considered as an expression
                        (define (expression-operator l) (car l))
-                       (define (expression-operand l) (cdr l)))))
+                       (define (expression-operands l) (cdr l)))))
   )
 
 ;;Contracts
@@ -240,7 +240,7 @@
   (define (n:if-second f) (if-second-branch f))
   (define (n:quote-datum f) (quote-datum f))
   (define (n:expression-operator f) (expression-operator f))
-  (define (n:expression-operand f) (check-primitive-part 'operands (expression-operand f) list?))
+  (define (n:expression-operands f) (check-primitive-part 'operands (expression-operands f) list?))
   )
 ;;--------------------------
 
@@ -248,13 +248,13 @@
 (begin-encourage-inline
   ;;Arguments
   (define (arguments? v)
-    (or (list? v) (__operand? v)))
+    (or (list? v) (__operands? v)))
   (define (get-arguments-num-list o)
-    (if (list? o) (values (length o) o) (values (__operand-num o) (__operand-list o))))
-  (define (make-operand lst)
-    (__operand (length lst) lst))
-  (define (map-operand p o)
-    (struct-copy __operand o (list (map p (__operand-list o)))))
+    (if (list? o) (values (length o) o) (values (__operands-num o) (__operands-list o))))
+  (define (make-operands lst)
+    (__operands (length lst) lst))
+  (define (map-operands p o)
+    (struct-copy __operands o (list (map p (__operands-list o)))))
   ;;Procedures
   (define (make-closure env args body)
     (__closure env (length args) args body))
@@ -336,7 +336,7 @@
                       ((lambda? f) (make-lambda (n:lambda-args f) (map (lambda (f) (plain-expand f e)) (n:lambda-body f))))
                       ((quote? f) f)
                       ((expression? f) (make-expression (plain-expand (n:expression-operator f) e)
-                                                        (map (lambda (f) (plain-expand f e)) (n:expression-operand f))))
+                                                        (map (lambda (f) (plain-expand f e)) (n:expression-operands f))))
                       (else (raise (exn:fail:scheme:syntax (format "Malformed form: ~s" f) (current-continuation-marks)))))))
              (expand-scheme
               (lambda (f e)
@@ -393,9 +393,9 @@
 
                       ((expression? exp)
                        (define operator (analyze-primitive-form (n:expression-operator exp)))
-                       (define operand (make-operand (map analyze-primitive-form (n:expression-operand exp))))
+                       (define operands (make-operands (map analyze-primitive-form (n:expression-operands exp))))
                        (lambda (env)
-                         (plain-apply (operator env) (map-operand (lambda (o) (delay-it o env)) operand))))
+                         (plain-apply (operator env) (map-operands (lambda (o) (delay-it o env)) operands))))
 
                       (else (raise (exn:fail:scheme:syntax (format "Malformed form: ~s" exp)) (current-continuation-marks))))))
 
@@ -403,22 +403,22 @@
              (plain-eval (lambda (exp env) (eval-primitive-form (expand-scheme exp env) env)))
 
              (plain-apply
-              (lambda (operator operand)
+              (lambda (operator operands)
                 ;;Checking
-                (define-values (operand-num operand-list)
-                  (cond ((arguments? operand) (get-arguments-num-list operand))
-                        (else (raise (exn:fail:scheme:contract (format "~s cannot be supplied as by-position arguments" operand) (current-continuation-marks))))))
+                (define-values (operands-num operands-list)
+                  (cond ((arguments? operands) (get-arguments-num-list operands))
+                        (else (raise (exn:fail:scheme:contract (format "~s cannot be supplied as by-position arguments" operands) (current-continuation-marks))))))
                 (cond ((not (scheme-procedure? operator))
                        (raise (exn:fail:scheme:contract:applicable (format "~s is not an applicable object" operator) (current-continuation-marks))))
-                      ((not (= (get-procedure-arity operator) operand-num))
-                       (raise-arity (get-procedure-arity operator) operand-num)))
-                (cond ((not (or (__operand? operand) (list? operand)))))
+                      ((not (= (get-procedure-arity operator) operands-num))
+                       (raise-arity (get-procedure-arity operator) operands-num)))
+                (cond ((not (or (__operands? operands) (list? operands)))))
                 ;;Application
                 (cond ((__primitive? operator)
-                       (apply (__primitive-proc operator) (map force-it operand-list)))
+                       (apply (__primitive-proc operator) (map force-it operands-list)))
                       ((__thunk? operator) (actual-value operator)) ;;These thunks always have their arg fields set
                       (else
-                       (define env (add-frame (__closure-env operator) (map cons-arg-val (__closure-args operator) operand-list)))
+                       (define env (add-frame (__closure-env operator) (map cons-arg-val (__closure-args operator) operands-list)))
                        ((__closure-body operator) env)))))
 
              ;;Exported environment constructors
@@ -484,8 +484,8 @@
       (values expand-scheme
               (lambda (exp env)
                 (contract-monitor (plain-eval exp env)))
-              (lambda (operator operand)
-                (contract-monitor (plain-apply operator operand)))
+              (lambda (operator operands)
+                (contract-monitor (plain-apply operator operands)))
               make-optimal-base-environment
               make-example-base-environment)))
   )
