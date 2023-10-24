@@ -62,13 +62,15 @@
           (apply-scheme (-> any/c list? any))))
 
 ;;Exceptions
-(struct exn:fail:scheme exn:fail ())
-(struct exn:fail:scheme:syntax exn:fail:scheme ())
-(struct exn:fail:scheme:syntax:primitive exn:fail:scheme:syntax ())
-(struct exn:fail:scheme:syntax:unbound exn:fail:scheme:syntax ())
-(struct exn:fail:scheme:contract exn:fail:scheme ())
-(struct exn:fail:scheme:contract:arity exn:fail:scheme:contract ())
-(struct exn:fail:scheme:contract:applicable exn:fail:scheme:contract ())
+(begin-encourage-inline
+  (struct exn:fail:scheme exn:fail ())
+  (struct exn:fail:scheme:syntax exn:fail:scheme ())
+  (struct exn:fail:scheme:syntax:primitive exn:fail:scheme:syntax ())
+  (struct exn:fail:scheme:syntax:unbound exn:fail:scheme:syntax ())
+  (struct exn:fail:scheme:contract exn:fail:scheme ())
+  (struct exn:fail:scheme:contract:arity exn:fail:scheme:contract ())
+  (struct exn:fail:scheme:contract:applicable exn:fail:scheme:contract ())
+  )
 
 ;;Macros
 (define-syntax (check-and-extract-form stx)
@@ -108,14 +110,12 @@
   )
 
 ;;Representation
-;;General predicates
 (begin-encourage-inline
+  ;;General predicates
   (define (scheme-self-evaluating? v) (or (number? v) (boolean? v) (bytes? v) (__void? v)))
   (define (scheme-variable? v) (symbol? v))
   (define (scheme-procedure? v) (or (__primitive? v) (__closure? v) (__thunk? v)))
-  )
-;;Default representation
-(begin-encourage-inline
+  ;;Default representation
   (define (default-representation? f)
     (non-empty-list? f))
   (define (make-define id val) (list 'define id val))
@@ -127,16 +127,15 @@
   (define (make-expression operator operand) (cons operator operand))
   )
 
-;;Frames
+;;Basic evironments and environment frames operations
 (begin-encourage-inline
+  ;;Frames
   (define (make-frame assocs) (make-hasheq assocs))
   (define ((make-frame-setter val) t id) (hash-set! t id val) _void)
   (define (has-id? frame id) (hash-has-key? frame id))
   (define (set-frame! frame id val) (hash-set! frame id val))
   (define (refer-frame frame id) (hash-ref frame id))
-  )
-;;Environments
-(begin-encourage-inline
+  ;;Environments
   (define (make-env assocs #:expander expander) (__environment (list (make-frame assocs)) expander))
   (define (add-frame env assocs) (struct-copy __environment env (frames (cons (make-frame assocs) (__environment-frames env)))))
   (define (refer-env env id #:proc (proc refer-frame))
@@ -150,9 +149,9 @@
 
 ;;Data-directed dispatching
 ;;--------------------------
-;;Special forms
-;;Only syntax are checked here
 (begin-encourage-inline
+  ;;Special forms
+  ;;Only syntax are checked here
   (define-generics define-form
     (define? define-form)
     (define-id define-form)
@@ -205,10 +204,8 @@
                        (define (if-test f) (check-and-extract-form f (list 'if test first second) test))
                        (define (if-first-branch f) (check-and-extract-form f (list 'if test first second) first))
                        (define (if-second-branch f) (check-and-extract-form f ((list 'if test first second) second) ((list 'if test first) #f))))))
-  )
 
-;;Scheme expression
-(begin-encourage-inline
+  ;;Scheme expression
   (define-generics s-exp
     (expression? s-exp)
     (expression-operator s-exp)
@@ -248,8 +245,8 @@
 ;;--------------------------
 
 ;;Arity handling
-;;Operands
 (begin-encourage-inline
+  ;;Operands
   (define (make-operand lst)
     (__operand (length lst) lst))
   (define (map-operand p o)
@@ -258,9 +255,7 @@
     (if (list? o) (length o) (__operand-num o)))
   (define (get-operand-list o)
     (if (list? o) o (__operand-list o)))
-  )
-;;Procedures
-(begin-encourage-inline
+  ;;Procedures
   (define (make-closure env args body)
     (__closure env (length args) args body))
   (define (get-procedure-arity p)
@@ -320,7 +315,8 @@
 ;;Expansion, evaluation and application
 (begin-encourage-inline
   (define-values (expand-scheme eval-scheme apply-scheme make-optimal-base-environment make-example-base-environment)
-    (letrec ((expand-scheme ;;Transform all kinds of representations into the default representation
+    (letrec ((expand-scheme
+              ;;Expand derived expressions and transform all kinds of representations into the default representation
               (lambda (f e)
                 (cond ((let ((expanded (env-expand f e)))
                          (if (__expander_box? expanded)
@@ -465,6 +461,8 @@
                    (c (make-expression (make-lambda id body) expr)))
                   ((list 'let* (list assoc ...) body ...)
                    (c (car (foldl (lambda (a b) (list (make-let (list a) b))) body (reverse assoc)))))
+                  ((list 'letrec (list (list id expr) ...) body ...)
+                   (c (make-let null (cons (make-begin (map (lambda (i e) (make-define i e)) id expr)) body))))
                   (_ #f))))
              (make-example-base-environment
               (lambda () (make-optimal-base-environment more-fixed-bindings #:expander example-expander))))
@@ -532,15 +530,15 @@
        (define scheme-traverse
          (time
           (eval-scheme
-           '(begin
-              (define foldl
+           '(letrec
+              ((foldl
                 (lambda (proc init list)
                   (if (null? list)
                       init
                       (foldl proc (proc (car list) init) (cdr list)))))
-              (define reverse (lambda (l) (foldl cons null l)))
-              (define map (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l))))
-              (define add1 (lambda (n) (+ n 1)))
+               (reverse (lambda (l) (foldl cons null l)))
+               (map (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l))))
+               (add1 (lambda (n) (+ n 1))))
               (lambda (l) (reverse (map add1 l))))
            (make-example-base-environment))))
        (define racket-traverse
