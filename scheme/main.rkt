@@ -33,7 +33,7 @@
 
          (struct-out __void)
 
-         scheme-self-evaluating? scheme-variable? scheme-procedure?
+         scheme-self-evaluating? scheme-variable? scheme-procedure? scheme-primitive?
 
          default-representation?
          (rename-out (make-if default:make-if)
@@ -121,6 +121,7 @@
   (define (scheme-self-evaluating? v) (or (number? v) (boolean? v) (bytes? v) (__void? v) (eq? v _undefined)))
   (define (scheme-variable? v) (symbol? v))
   (define (scheme-procedure? v) (or (__primitive? v) (__closure? v) (__thunk? v)))
+  (define (scheme-primitive? v) (__primitive? v))
   ;;Default representation
   (define (default-representation? f)
     (non-empty-list? f))
@@ -215,7 +216,7 @@
                        (define (if? l) (eq? 'if (car l)))
                        (define (if-test f) (check-and-extract-form f (list 'if test first second) test))
                        (define (if-first-branch f) (check-and-extract-form f (list 'if test first second) first))
-                       (define (if-second-branch f) (check-and-extract-form f ((list 'if test first second) second) ((list 'if test first) #f))))))
+                       (define (if-second-branch f) (check-and-extract-form f ((list 'if test first second) second) ((list 'if test first) _void))))))
 
   ;;Scheme expression
   (define-generics s-exp
@@ -454,6 +455,9 @@
              ;;Exported environment constructors
              (fixed-bindings
               (list
+               (cons 'primitive? (make-primitive scheme-primitive? 1))
+               (cons 'procedure? (make-primitive scheme-procedure? 1))
+               (cons 'self-evaluating? (make-primitive scheme-self-evaluating? 1))
                (cons 'apply (make-primitive plain-apply 2))
                (cons 'eval (make-primitive plain-eval 2))
                (cons 'expand (make-primitive expand-scheme 2))))
@@ -472,6 +476,9 @@
                     (cons '* (make-primitive * 2))
                     (cons '/ (make-primitive / 2))
                     (cons 'number? (make-primitive number? 1))
+                    (cons 'real? (make-primitive real? 1))
+                    (cons 'rational? (make-primitive rational? 1))
+                    (cons 'integer? (make-primitive integer? 1))
                     (cons '< (make-primitive < 2))
                     (cons '> (make-primitive > 2))
                     (cons '= (make-primitive = 2))
@@ -508,9 +515,45 @@
                    (c (make-let null (cons (make-begin (map (lambda (i e) (make-define i e)) id expr)) body))))
                   ((list 'define (cons name args) body ...)
                    (c (make-define name (make-lambda args body))))
+                  ((list 'cond (list test body ...) ... (list 'else else-body ...))
+                   (c (foldl (lambda (t b e) (make-if t (make-begin b) e))
+                             (make-begin else-body)
+                             (reverse test)
+                             (reverse body))))
+                  ((list 'cond (list test body ...) ...)
+                   (c (foldl (lambda (t b e) (make-if t (make-begin b) e))
+                             _void
+                             (reverse test)
+                             (reverse body))))
                   (_ #f))))
              (make-example-base-environment
-              (lambda () (make-optimal-base-environment more-fixed-bindings #:expander example-expander))))
+              (lambda ()
+                (define new (make-optimal-base-environment more-fixed-bindings #:expander example-expander))
+                (plain-eval
+                 '(begin
+                    (define (cons-stream car (cdr lazy-memo)) (cons car cdr))
+                    (define (stream-cdr s) ((cdr s)))
+                    (define (stream-car s) (car s))
+                    (define stream-empty? null?)
+                    (define empty-stream null)
+
+                    (define (add1 n) (+ n 1))
+                    (define (sub1 n) (- n 1))
+                    (define (minus n) (- 0 n))
+
+                    (define (foldl proc init list)
+                      (if (null? list)
+                          init
+                          (foldl proc (proc (car list) init) (cdr list))))
+                    (define (ormap proc list)
+                      (if (null? list)
+                          #t
+                          (if (proc (car list)) (ormap proc (cdr list)) #f)))
+                    (define (reverse l) (foldl cons null l))
+                    (define (map proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l)))
+                    )
+                 new)
+                new)))
       (values expand-scheme
               (lambda (exp env)
                 (contract-monitor (plain-eval exp env)))
@@ -542,6 +585,7 @@
   (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:set!-id (default:make-set! '(+ 1 2) 3))))
   (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
   (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:begin-body (default:make-begin null))))
+  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:define-val (default:make-define 'a (default:make-define 'b 1)))))
   (check-exn exn:fail:scheme:syntax:unbound? (lambda () (eval-scheme '(+) (make-optimal-base-environment))))
   (check-exn exn:fail:scheme:contract:applicable? (lambda () (eval-scheme '(+) (make-optimal-base-environment (list (cons '+ 0))))))
   (check-exn exn:fail:scheme:contract:arity? (lambda () (eval-scheme '((lambda (n) (+ n 1))) (make-optimal-base-environment (list (cons '+ (make-primitive + 2)))))))
@@ -555,17 +599,7 @@
   (check-equal? (n:quote-datum (default:make-quote '(1 . 2))) '(1 . 2))
   ;;Expansion, evaluation and application
   (define env (make-example-base-environment))
-  (check-true
-   (=
-    (eval-scheme
-     '(begin
-        (define map (lambda (proc l)
-                      (if (null? l)
-                          null
-                          (cons (proc (car l)) (map proc (cdr l))))))
-        (apply + (map (lambda (v) (* v (+ v -1))) '(1 2))))
-     env)
-    2))
+  (check-true (= (eval-scheme '(apply + (map (lambda (v) (* v (+ v -1))) '(1 2))) env) 2))
   (check-true (= (apply-scheme (eval-scheme '(lambda (a) (set! a 1) a) env) (list 0)) 1))
   (check-equal? (expand-scheme '(let ((a 1)) (+ a 1)) env) '((lambda (a) (+ a 1)) 1))
   (check-equal? (expand-scheme '(let* ((a 1) (b (+ a 1))) (+ a b)) env) '((lambda (a) ((lambda (b) (+ a b)) (+ a 1))) 1))
@@ -584,16 +618,7 @@
        (define scheme-traverse
          (time
           (eval-scheme
-           '(letrec
-              ((foldl
-                (lambda (proc init list)
-                  (if (null? list)
-                      init
-                      (foldl proc (proc (car list) init) (cdr list)))))
-               (reverse (lambda (l) (foldl cons null l)))
-               (map (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l))))
-               (add1 (lambda (n) (+ n 1))))
-              (lambda (l) (reverse (map add1 l))))
+           '(lambda (l) (reverse (map add1 l)))
            (make-example-base-environment))))
        (define racket-traverse
          (time (eval '(lambda (l) (reverse (map add1 l))))))
@@ -608,26 +633,9 @@
          (time
           (eval-scheme
            '(begin
-              (define foldl
-                (lambda (proc init list)
-                  (if (null? list)
-                      init
-                      (foldl proc (proc (car list) init) (cdr list)))))
-              (define ormap
-                (lambda (proc list)
-                  (if (null? list)
-                      #t
-                      (if (proc (car list)) (ormap proc (cdr list)) #f))))
-              (define reverse (lambda (l) (foldl cons null l)))
-              (define map (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l))))
-
-              (define cons-stream (lambda (car (cdr lazy-memo)) (cons car cdr)))
-              (define stream-car (lambda (s) (car s)))
-              (define stream-cdr (lambda (s) ((cdr s))))
-              (define empty-stream null)
               (define streams-empty?
                 (lambda (sl)
-                  (ormap null? sl)))
+                  (ormap stream-empty? sl)))
               (define streams-map
                 (lambda (proc sl)
                   (if (streams-empty? sl)
@@ -637,9 +645,9 @@
                 (lambda (s n)
                   (if (= n 0)
                       (stream-car s)
-                      (stream-ref (stream-cdr s) (- n 1)))))
+                      (stream-ref (stream-cdr s) (sub1 n)))))
 
-              (define odds/+- (cons-stream 1 (streams-map (lambda (n) (if (< n 0) (+ (- 0 n) 2) (- 0 (+ n 2)))) (cons odds/+- null))))
+              (define odds/+- (cons-stream 1 (streams-map (lambda (n) (if (< n 0) (+ (minus n) 2) (minus (+ n 2)))) (cons odds/+- null))))
               (define pi-stream
                 (cons-stream (stream-car odds/+-) (streams-map (lambda (o p) (+ (/ 1 o) p)) (cons (stream-cdr odds/+-) (cons pi-stream null)))))
               (* 4 (stream-ref pi-stream 9999)))
