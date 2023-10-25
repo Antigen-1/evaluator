@@ -97,22 +97,28 @@
   (struct __expander_box (expression))
   (struct __environment (frames expander))
   (struct __thunk (exp env (arg #:auto) (run? #:auto)) #:mutable #:auto-value #f)
+  (struct __undefined ())
   )
 
 ;;Constants
 (define _void (__void))
+(define _undefined (__undefined))
 
 ;;Utilities
 (begin-encourage-inline
+  (define (not-define? f) (or (scheme-self-evaluating? f) (scheme-variable? f) (not (define? f))))
   (define (non-empty-list? l) (and (list? l) (not (null? l))))
   (define (check-primitive-part n v pred) (cond ((pred v) v) (else (raise (exn:fail:scheme:syntax:primitive (format "Malformed ~a: ~s" n v) (current-continuation-marks))))))
   (define (raise-arity args vals) (raise (exn:fail:scheme:contract:arity (format "Arity mismatch:\nexpected: ~a\nactual: ~a" args vals) (current-continuation-marks))))
+  (define (filter-split proc lst)
+    (define r (foldl (lambda (e p) (if (proc e) (cons (cons e (car p)) (cdr p)) (cons (car p) (cons e (cdr p))))) (cons null null) (reverse lst)))
+    (values (car r) (cdr r)))
   )
 
 ;;Representation
 (begin-encourage-inline
   ;;General predicates
-  (define (scheme-self-evaluating? v) (or (number? v) (boolean? v) (bytes? v) (__void? v)))
+  (define (scheme-self-evaluating? v) (or (number? v) (boolean? v) (bytes? v) (__void? v) (eq? v _undefined)))
   (define (scheme-variable? v) (symbol? v))
   (define (scheme-procedure? v) (or (__primitive? v) (__closure? v) (__thunk? v)))
   ;;Default representation
@@ -131,20 +137,26 @@
 (begin-encourage-inline
   ;;Frames
   (define (make-frame assocs) (make-hasheq assocs))
-  (define ((make-frame-setter val) t id) (hash-set! t id val) _void)
+  (define (set-frame! t id val) (hash-set! t id val) _void)
+  (define (refer-frame frame id) (hash-ref frame id _undefined))
   (define (has-id? frame id) (hash-has-key? frame id))
-  (define (set-frame! frame id val) (hash-set! frame id val))
-  (define (refer-frame frame id) (hash-ref frame id))
   ;;Environments
   (define (make-env assocs #:expander expander) (__environment (list (make-frame assocs)) expander))
   (define (add-frame env assocs) (struct-copy __environment env (frames (cons (make-frame assocs) (__environment-frames env)))))
-  (define (refer-env env id #:proc (proc refer-frame))
+  (define (raise-unbound id) (raise (exn:fail:scheme:syntax:unbound (format "~a is not bound" id) (current-continuation-marks))))
+  (define (lookup-variable env id)
     (let/cc return
       (for ((t (in-list (__environment-frames env))))
-        (cond ((has-id? t id) (return (proc t id)))))
-      (raise (exn:fail:scheme:syntax:unbound (format "~a is not bound" id) (current-continuation-marks)))))
+        (define v (refer-frame t id))
+        (cond ((not (eq? _undefined v)) (return v))))
+      (raise-unbound id)))
   (define (env-expand form env) ((__environment-expander env) form __expander_box))
-  (define (set-env! env id val) (set-frame! (car (__environment-frames env)) id val) _void)
+  (define (define-variable! env id val) (set-frame! (car (__environment-frames env)) id val) _void)
+  (define (assign-variable! env id val)
+    (let/cc break
+      (for ((t (in-list (__environment-frames env))))
+        (cond ((has-id? t id) (set-frame! t id val) (break _void))))
+      (raise-unbound id)))
   )
 
 ;;Data-directed dispatching
@@ -229,18 +241,18 @@
 ;;Selectors with result checking
 (begin-encourage-inline
   (define (n:define-id f) (check-primitive-part 'identifier (define-id f) scheme-variable?))
-  (define (n:define-val f) (define-val f))
+  (define (n:define-val f) (check-primitive-part 'value (define-val f) not-define?))
   (define (n:set!-id f) (check-primitive-part 'identifier (set!-id f) scheme-variable?))
-  (define (n:set!-val f) (set!-val f))
+  (define (n:set!-val f) (check-primitive-part 'value (set!-val f) not-define?))
   (define (n:begin-body f) (check-primitive-part '|begin body| (begin-body f) non-empty-list?))
   (define (n:lambda-args f) (check-primitive-part 'arguments (lambda-args f) (listof (or/c scheme-variable? (list/c scheme-variable? (or/c 'lazy 'lazy-memo))))))
   (define (n:lambda-body f) (check-primitive-part '|lambda body| (lambda-body f) non-empty-list?))
-  (define (n:if-test f) (if-test f))
-  (define (n:if-first f) (if-first-branch f))
-  (define (n:if-second f) (if-second-branch f))
+  (define (n:if-test f) (check-primitive-part 'test (if-test f) not-define?))
+  (define (n:if-first f) (check-primitive-part 'then (if-first-branch f) not-define?))
+  (define (n:if-second f) (check-primitive-part 'else (if-second-branch f) not-define?))
   (define (n:quote-datum f) (quote-datum f))
-  (define (n:expression-operator f) (expression-operator f))
-  (define (n:expression-operands f) (check-primitive-part 'operands (expression-operands f) list?))
+  (define (n:expression-operator f) (check-primitive-part 'operator (expression-operator f) not-define?))
+  (define (n:expression-operands f) (check-primitive-part 'operands (expression-operands f) (listof not-define?)))
   )
 ;;--------------------------
 
@@ -315,7 +327,24 @@
 ;;Expansion, evaluation and application
 (begin-encourage-inline
   (define-values (expand-scheme eval-scheme apply-scheme make-optimal-base-environment make-example-base-environment)
-    (letrec ((plain-expand
+    (letrec ((expand-primitive-internal-sequence ;;Scan out all internal definitions
+              (lambda (l)
+                (define (define->set d) (make-set! (define-id d) (define-val d)))
+                (define appended (append-primitive-sequence-body l))
+                (define-values (defs others) (filter-split (lambda (f) (and (default-representation? f) (define? f))) appended))
+                (if (null? defs)
+                    appended
+                    (list
+                     (make-expression (make-lambda
+                                       (map define-id defs)
+                                       (append (map define->set defs) others))
+                                      (map (lambda (_) _undefined) defs))))))
+             (append-primitive-sequence-body
+              (lambda (l)
+                (foldl (lambda (i a) (if (and (default-representation? i) (begin? i)) (append (append-primitive-sequence-body (begin-body i)) a) (cons i a)))
+                       null
+                       (reverse l))))
+             (plain-expand
               (lambda (f e)
                 ;;Expand derived expressions and transform all kinds of representations into the default representation
                 (cond ((let ((expanded (env-expand f e)))
@@ -332,8 +361,9 @@
                       ((define? f) (make-define (n:define-id f)
                                                 (plain-expand (n:define-val f) e)))
                       ((set!? f) (make-set! (n:set!-id f) (plain-expand (n:set!-val f) e)))
-                      ((begin? f) (make-begin (map (lambda (f) (plain-expand f e)) (n:begin-body f))))
-                      ((lambda? f) (make-lambda (n:lambda-args f) (map (lambda (f) (plain-expand f e)) (n:lambda-body f))))
+                      ((begin? f) (make-begin (append-primitive-sequence-body (map (lambda (f) (plain-expand f e)) (n:begin-body f)))))
+                      ((lambda? f) (make-lambda (n:lambda-args f)
+                                                (expand-primitive-internal-sequence (map (lambda (f) (plain-expand f e)) (n:lambda-body f)))))
                       ((quote? f) f)
                       ((expression? f) (make-expression (plain-expand (n:expression-operator f) e)
                                                         (map (lambda (f) (plain-expand f e)) (n:expression-operands f))))
@@ -360,40 +390,40 @@
              (analyze-primitive-form
               (lambda (exp)
                 (cond ((scheme-self-evaluating? exp) (lambda (_) exp))
-                      ((scheme-variable? exp) (lambda (env) (refer-env env exp)))
+                      ((scheme-variable? exp) (lambda (env) (lookup-variable env exp)))
 
                       ((if? exp)
-                       (define test (analyze-primitive-form (n:if-test exp)))
-                       (define then (analyze-primitive-form (n:if-first exp)))
-                       (define alter (analyze-primitive-form (n:if-second exp)))
+                       (define test (analyze-primitive-form (if-test exp)))
+                       (define then (analyze-primitive-form (if-first-branch exp)))
+                       (define alter (analyze-primitive-form (if-second-branch exp)))
                        (lambda (env)
                          (if (test env)
                              (then env)
                              (alter env))))
                       ((quote? exp)
-                       (define datum (n:quote-datum exp))
+                       (define datum (quote-datum exp))
                        (lambda (_) datum))
                       ((begin? exp)
-                       (define seq (n:begin-body exp))
+                       (define seq (begin-body exp))
                        (analyze-sequence seq))
                       ((lambda? exp)
-                       (define args (n:lambda-args exp))
-                       (define body (analyze-sequence (n:lambda-body exp)))
+                       (define args (lambda-args exp))
+                       (define body (analyze-sequence (lambda-body exp)))
                        (lambda (env)
                          (make-closure env args body)))
                       ((set!? exp)
-                       (define id (n:set!-id exp))
-                       (define val (analyze-primitive-form (n:set!-val exp)))
-                       (lambda (env) (refer-env env id #:proc (make-frame-setter (val env)))))
+                       (define id (set!-id exp))
+                       (define val (analyze-primitive-form (set!-val exp)))
+                       (lambda (env) (assign-variable! env id (val env))))
                       ((define? exp)
-                       (define id (n:define-id exp))
-                       (define val (analyze-primitive-form (n:define-val exp)))
+                       (define id (define-id exp))
+                       (define val (analyze-primitive-form (define-val exp)))
                        (lambda (env)
-                         (set-env! env id (val env))))
+                         (define-variable! env id (val env))))
 
                       ((expression? exp)
-                       (define operator (analyze-primitive-form (n:expression-operator exp)))
-                       (define operands (make-operands (map analyze-primitive-form (n:expression-operands exp))))
+                       (define operator (analyze-primitive-form (expression-operator exp)))
+                       (define operands (make-operands (map analyze-primitive-form (expression-operands exp))))
                        (lambda (env)
                          (plain-apply (operator env) (map-operands (lambda (o) (delay-it o env)) operands))))
 
@@ -511,6 +541,7 @@
   (check-not-exn (lambda () (expand-scheme (list (list 1)) (make-optimal-base-environment))))
   (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:set!-id (default:make-set! '(+ 1 2) 3))))
   (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
+  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:begin-body (default:make-begin null))))
   (check-exn exn:fail:scheme:syntax:unbound? (lambda () (eval-scheme '(+) (make-optimal-base-environment))))
   (check-exn exn:fail:scheme:contract:applicable? (lambda () (eval-scheme '(+) (make-optimal-base-environment (list (cons '+ 0))))))
   (check-exn exn:fail:scheme:contract:arity? (lambda () (eval-scheme '((lambda (n) (+ n 1))) (make-optimal-base-environment (list (cons '+ (make-primitive + 2)))))))
@@ -542,6 +573,8 @@
   (check-equal? (eval-scheme '(eval '(map (lambda (n) (+ n 1)) '(1 2)) (current-environment)) env) '(2 3))
   (check-true (= (eval-scheme '(eval '((lambda (n) (+ n 1)) 1) (make-base-environment)) env) 2))
   (check-true (= (eval-scheme '(begin (define (add1 n) (+ n 1)) (add1 1)) env) 2))
+  (check-true (= (eval-scheme '(begin (begin (define a 1)) a) env) 1))
+  (check-true (= (eval-scheme '(begin (begin (define b 1)) (define c 2) (begin (+ b c))) env) 3))
   ;;Benchmark
   (define-runtime-module-path-index namespace-module '(submod ".." namespace))
   (define-namespace-anchor anchor)
