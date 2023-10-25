@@ -455,9 +455,6 @@
              ;;Exported environment constructors
              (fixed-bindings
               (list
-               (cons 'primitive? (make-primitive scheme-primitive? 1))
-               (cons 'procedure? (make-primitive scheme-procedure? 1))
-               (cons 'self-evaluating? (make-primitive scheme-self-evaluating? 1))
                (cons 'apply (make-primitive plain-apply 2))
                (cons 'eval (make-primitive plain-eval 2))
                (cons 'expand (make-primitive expand-scheme 2))))
@@ -499,6 +496,9 @@
                     (cons 'bytes<? (make-primitive bytes<? 2))
                     (cons 'bytes-ref (make-primitive bytes-ref 2))
                     ;;Renamed
+                    (cons 'primitive? (make-primitive scheme-primitive? 1))
+                    (cons 'procedure? (make-primitive scheme-procedure? 1))
+                    (cons 'self-evaluating? (make-primitive scheme-self-evaluating? 1))
                     (cons 'void (make-primitive __void 0))
                     (cons 'void? (make-primitive __void? 1))
                     ))
@@ -599,6 +599,7 @@
   (check-equal? (n:quote-datum (default:make-quote '(1 . 2))) '(1 . 2))
   ;;Expansion, evaluation and application
   (define env (make-example-base-environment))
+  (check-true (= (eval-scheme '((lambda (n) (cond ((>= n 0) n) (else (minus n)))) -1) env) 1))
   (check-true (= (eval-scheme '(apply + (map (lambda (v) (* v (+ v -1))) '(1 2))) env) 2))
   (check-true (= (apply-scheme (eval-scheme '(lambda (a) (set! a 1) a) env) (list 0)) 1))
   (check-equal? (expand-scheme '(let ((a 1)) (+ a 1)) env) '((lambda (a) (+ a 1)) 1))
