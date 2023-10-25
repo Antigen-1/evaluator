@@ -339,9 +339,9 @@
                                        (map define-id defs)
                                        (append (map define->set defs) others))
                                       (map (lambda (_) _undefined) defs))))))
-             (append-primitive-sequence-body
+             (append-primitive-sequence-body ;;This function will not append sequences recursively
               (lambda (l)
-                (foldl (lambda (i a) (if (and (default-representation? i) (begin? i)) (append (append-primitive-sequence-body (begin-body i)) a) (cons i a)))
+                (foldl (lambda (i a) (if (and (default-representation? i) (begin? i)) (append (begin-body i) a) (cons i a)))
                        null
                        (reverse l))))
              (plain-expand
