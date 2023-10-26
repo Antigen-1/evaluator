@@ -657,7 +657,7 @@
                       (stream-car s)
                       (stream-ref (stream-cdr s) (sub1 n)))))
 
-              (define odds/+- (cons-stream 1 (streams-map (lambda (n) (if (< n 0) (+ (minus n) 2) (minus (+ n 2)))) (cons odds/+- null))))
+              (define odds/+- (cons-stream 1 (streams-map (lambda (n) (if (< n 0) (- 2 n) (minus (+ n 2)))) (cons odds/+- null))))
               (define pi-stream
                 (cons-stream (stream-car odds/+-) (streams-map (lambda (o p) (+ (/ 1 o) p)) (cons (stream-cdr odds/+-) (cons pi-stream null)))))
               (* 4 (stream-ref pi-stream 9999)))
@@ -670,7 +670,7 @@
                          empty-stream
                          (stream-cons #:eager (apply proc (map stream-first sl))
                                       (apply stream-map* proc (map stream-rest sl)))))
-                   (define odds/+- (stream-cons #:eager 1 (stream-map* (lambda (n) (if (< n 0) (+ (- n) 2) (- (+ n 2)))) odds/+-)))
+                   (define odds/+- (stream-cons #:eager 1 (stream-map* (lambda (n) (if (< n 0) (- 2 n) (- (+ n 2)))) odds/+-)))
                    (define pi-stream (stream-cons #:eager (stream-first odds/+-) (stream-map* (lambda (o p) (+ (/ 1 o) p)) (stream-rest odds/+-) pi-stream)))
                    (* 4 (stream-ref pi-stream 9999))))))
        (check-true (= racket-pi-stream-10000th scheme-pi-stream-10000th))))
