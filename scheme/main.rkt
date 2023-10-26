@@ -42,7 +42,35 @@
                      (make-quote default:make-quote)
                      (make-lambda default:make-lambda)
                      (make-define default:make-define)
-                     (make-expression default:make-expression))
+                     (make-expression default:make-expression)
+                     (define-id unsafe:define-id)
+                     (define-val unsafe:define-val)
+                     (set!-id unsafe:set!-id)
+                     (set!-val unsafe:set!-val)
+                     (begin-body unsafe:begin-body)
+                     (if-test unsafe:if-test)
+                     (if-first-branch unsafe:if-first-branch)
+                     (if-second-branch unsafe:if-second-branch)
+                     (lambda-args unsafe:lambda-args)
+                     (lambda-body unsafe:lambda-body)
+                     (quote-datum unsafe:quote-datum)
+                     (expression-operator unsafe:expression-operator)
+                     (expression-operands unsafe:expression-operands)
+                     (n:define-id checked:define-id)
+                     (n:define-val checked:define-val)
+                     (n:set!-id checked:set!-id)
+                     (n:set!-val checked:set!-val)
+                     (n:begin-body checked:begin-body)
+                     (n:if-test checked:if-test)
+                     (n:if-first-branch checked:if-first-branch)
+                     (n:if-second-branch checked:if-second-branch)
+                     (n:lambda-args checked:lambda-args)
+                     (n:lambda-body checked:lambda-body)
+                     (n:quote-datum checked:quote-datum)
+                     (n:expression-operator checked:expression-operator)
+                     (n:expression-operands checked:expression-operands)
+                     )
+         define? set!? begin? if? lambda? quote? expression?
 
          gen:scheme-form
 
@@ -226,8 +254,8 @@
   (define (n:lambda-args f) (check-primitive-part 'arguments (lambda-args f) (listof (or/c scheme-variable? (list/c scheme-variable? (or/c 'lazy 'lazy-memo))))))
   (define (n:lambda-body f) (check-primitive-part '|lambda body| (lambda-body f) non-empty-list?))
   (define (n:if-test f) (check-primitive-part 'test (if-test f) not-define?))
-  (define (n:if-first f) (check-primitive-part 'then (if-first-branch f) not-define?))
-  (define (n:if-second f) (check-primitive-part 'else (if-second-branch f) not-define?))
+  (define (n:if-first-branch f) (check-primitive-part 'then (if-first-branch f) not-define?))
+  (define (n:if-second-branch f) (check-primitive-part 'else (if-second-branch f) not-define?))
   (define (n:quote-datum f) (quote-datum f))
   (define (n:expression-operator f) (check-primitive-part 'operator (expression-operator f) not-define?))
   (define (n:expression-operands f) (check-primitive-part 'operands (expression-operands f) (listof not-define?)))
@@ -334,8 +362,8 @@
                        (lambda (b) (plain-expand (__expander_box-expression b) e)))
                       ((or (scheme-variable? f) (scheme-self-evaluating? f)) f)
                       ((if? f) (make-if (plain-expand (n:if-test f) e)
-                                        (plain-expand (n:if-first f) e)
-                                        (plain-expand (n:if-second f) e)))
+                                        (plain-expand (n:if-first-branch f) e)
+                                        (plain-expand (n:if-second-branch f) e)))
                       ((define? f) (make-define (n:define-id f)
                                                 (plain-expand (n:define-val f) e)))
                       ((set!? f) (make-set! (n:set!-id f) (plain-expand (n:set!-val f) e)))
@@ -522,10 +550,14 @@
                       (if (null? list)
                           init
                           (foldl proc (proc (car list) init) (cdr list))))
-                    (define (ormap proc list)
+                    (define (andmap proc list)
                       (if (null? list)
                           #t
-                          (if (proc (car list)) (ormap proc (cdr list)) #f)))
+                          (if (proc (car list)) (andmap proc (cdr list)) #f)))
+                    (define (ormap proc list)
+                      (if (null? list)
+                          #f
+                          (if (proc (car list)) #t (ormap proc (cdr list)))))
                     (define (reverse l) (foldl cons null l))
                     (define (map proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l)))
                     )
@@ -544,12 +576,12 @@
   (require rackunit racket/list racket/stream racket/match (submod ".."))
   (provide (all-from-out rackunit racket/list racket/stream racket/match racket/base (submod ".."))))
 
-(module+ test
+(module* test racket/base
   ;; Any code in this `test` submodule runs when this file is run using DrRacket
   ;; or with `raco test`. The code here does not run when this file is
   ;; required by another module.
 
-  (require racket/runtime-path racket/pretty (submod ".." namespace))
+  (require racket/runtime-path racket/pretty (submod ".." namespace) (for-syntax racket/base))
 
   ;;Predicates
   (check-true (default-representation? (default:make-expression '+ '(1 2))))
@@ -559,10 +591,10 @@
   (check-true (expression? (default:make-expression '+ '(2 2))))
   ;;Exceptions
   (check-not-exn (lambda () (expand-scheme (list (list 1)) (make-optimal-base-environment))))
-  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:set!-id (default:make-set! '(+ 1 2) 3))))
-  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
-  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:begin-body (default:make-begin null))))
-  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (n:define-val (default:make-define 'a (default:make-define 'b 1)))))
+  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (checked:set!-id (default:make-set! '(+ 1 2) 3))))
+  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (checked:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
+  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (checked:begin-body (default:make-begin null))))
+  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (checked:define-val (default:make-define 'a (default:make-define 'b 1)))))
   (check-exn exn:fail:scheme:syntax:unbound? (lambda () (eval-scheme '(+) (make-optimal-base-environment))))
   (check-exn exn:fail:scheme:contract:applicable? (lambda () (eval-scheme '(+) (make-optimal-base-environment (list (cons '+ 0))))))
   (check-exn exn:fail:scheme:contract:arity? (lambda () (eval-scheme '((lambda (n) (+ n 1))) (make-optimal-base-environment (list (cons '+ (make-primitive + 2)))))))
@@ -571,9 +603,9 @@
   (check-exn exn:fail:scheme:contract? (lambda () (expand-scheme '(+ 1 2) null)))
   (check-exn exn:fail:scheme:contract? (lambda () (apply-scheme (eval-scheme '(lambda () 1) (make-example-base-environment)) (vector))))
   ;;Selectors
-  (check-eq? (n:define-id (default:make-define 'a 1)) 'a)
-  (check-equal? (n:if-test (default:make-if '(+ 1 2) 1 2)) '(+ 1 2))
-  (check-equal? (n:quote-datum (default:make-quote '(1 . 2))) '(1 . 2))
+  (check-eq? (checked:define-id (default:make-define 'a 1)) 'a)
+  (check-equal? (checked:if-test (default:make-if '(+ 1 2) 1 2)) '(+ 1 2))
+  (check-equal? (checked:quote-datum (default:make-quote '(1 . 2))) '(1 . 2))
   ;;Expansion, evaluation and application
   (define env (make-example-base-environment))
   (check-true (= (eval-scheme '((lambda (n) (cond ((>= n 0) n) (else (minus n)))) -1) env) 1))
