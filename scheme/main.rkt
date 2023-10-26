@@ -112,8 +112,8 @@
 
 ;;Structures
 (begin-encourage-inline
-  (struct __primitive (proc arity) #:constructor-name make-primitive)
-  (struct __closure (env arity args body))
+  (struct __primitive (proc arity) #:constructor-name make-primitive #:transparent)
+  (struct __closure (env arity args body) #:transparent)
   (struct __operands (num list))
   (struct __void ())
   (struct __expander_box (expression))
@@ -131,7 +131,7 @@
   (define (not-define? f) (or (scheme-self-evaluating? f) (scheme-variable? f) (not (define? f))))
   (define (non-empty-list? l) (and (list? l) (not (null? l))))
   (define (check-primitive-part n v pred) (cond ((pred v) v) (else (raise (exn:fail:scheme:syntax:primitive (format "Malformed ~a: ~s" n v) (current-continuation-marks))))))
-  (define (raise-arity args vals) (raise (exn:fail:scheme:contract:arity (format "Arity mismatch:\nexpected: ~a\nactual: ~a" args vals) (current-continuation-marks))))
+  (define (raise-arity op args vals) (raise (exn:fail:scheme:contract:arity (format "~a:\nArity mismatch:\nexpected: ~a\nactual: ~a" op args vals) (current-continuation-marks))))
   (define (filter-split proc lst)
     (define r (foldl (lambda (e p) (if (proc e) (cons (cons e (car p)) (cdr p)) (cons (car p) (cons e (cdr p))))) (cons null null) (reverse lst)))
     (values (car r) (cdr r)))
@@ -447,8 +447,7 @@
                 (cond ((not (scheme-procedure? operator))
                        (raise (exn:fail:scheme:contract:applicable (format "~s is not an applicable object" operator) (current-continuation-marks))))
                       ((not (= (get-procedure-arity operator) operands-num))
-                       (raise-arity (get-procedure-arity operator) operands-num)))
-                (cond ((not (or (__operands? operands) (list? operands)))))
+                       (raise-arity operator (get-procedure-arity operator) operands-num)))
                 ;;Application
                 (cond ((__primitive? operator)
                        (apply (__primitive-proc operator) (map force-it operands-list)))
@@ -468,9 +467,11 @@
                 (define new
                   (make-env
                    #:expander expander
-                   (cons (cons 'make-base-environment (make-primitive (lambda () (make-optimal-base-environment assoc #:expander expander)) 0))
-                         (cons (cons 'current-environment (make-primitive (lambda () new) 0))
-                               (append fixed-bindings assoc)))))
+                   (append
+                    (list (cons 'make-base-environment (make-primitive (lambda () (make-optimal-base-environment assoc #:expander expander)) 0))
+                          (cons 'the-global-environment (make-primitive (lambda () new) 0)))
+                    fixed-bindings
+                    assoc)))
                 new))
              (more-fixed-bindings
               (list (cons '+ (make-primitive + 2))
@@ -536,30 +537,36 @@
                 (define new (make-optimal-base-environment more-fixed-bindings #:expander example-expander))
                 (plain-eval
                  '(begin
-                    (define (cons-stream car (cdr lazy-memo)) (cons car cdr))
-                    (define (stream-cdr s) ((cdr s)))
-                    (define (stream-car s) (car s))
+                    (define cons-stream (let ((cons cons)) (lambda (car (cdr lazy-memo)) (cons car cdr))))
+                    (define stream-cdr (let ((cdr cdr)) (lambda (s) ((cdr s)))))
+                    (define stream-car (let ((car car)) (lambda (s) (car s))))
                     (define stream-empty? null?)
                     (define empty-stream null)
 
-                    (define (add1 n) (+ n 1))
-                    (define (sub1 n) (- n 1))
-                    (define (minus n) (- 0 n))
+                    (define add1 (let ((+ +)) (lambda (n) (+ n 1))))
+                    (define sub1 (let ((- -)) (lambda (n) (- n 1))))
+                    (define minus (let ((- -)) (lambda (n) (- 0 n))))
 
-                    (define (foldl proc init list)
-                      (if (null? list)
-                          init
-                          (foldl proc (proc (car list) init) (cdr list))))
-                    (define (andmap proc list)
-                      (if (null? list)
-                          #t
-                          (if (proc (car list)) (andmap proc (cdr list)) #f)))
-                    (define (ormap proc list)
-                      (if (null? list)
-                          #f
-                          (if (proc (car list)) #t (ormap proc (cdr list)))))
-                    (define (reverse l) (foldl cons null l))
-                    (define (map proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l)))
+                    (define foldl
+                      (let ((null? null?) (car car) (cdr cdr))
+                        (lambda (proc init list)
+                          (if (null? list)
+                              init
+                              (foldl proc (proc (car list) init) (cdr list))))))
+                    (define andmap
+                      (let ((null? null?) (car car) (cdr cdr))
+                        (lambda (proc list)
+                          (if (null? list)
+                              #t
+                              (if (proc (car list)) (andmap proc (cdr list)) #f)))))
+                    (define ormap
+                      (let ((null? null?) (car car) (cdr cdr))
+                        (lambda (proc list)
+                          (if (null? list)
+                              #f
+                              (if (proc (car list)) #t (ormap proc (cdr list)))))))
+                    (define reverse (let ((cons cons) (null null) (foldl foldl)) (lambda (l) (foldl cons null l))))
+                    (define map (let ((cons cons) (foldl foldl) (null null)) (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l)))))
                     )
                  new)
                 new)))
@@ -614,7 +621,7 @@
   (check-equal? (expand-scheme '(let ((a 1)) (+ a 1)) env) '((lambda (a) (+ a 1)) 1))
   (check-equal? (expand-scheme '(let* ((a 1) (b (+ a 1))) (+ a b)) env) '((lambda (a) ((lambda (b) (+ a b)) (+ a 1))) 1))
   (check-true (= 4 (apply-scheme (eval-scheme '(lambda ((v lazy)) (v)) env) (list 4))))
-  (check-equal? (eval-scheme '(eval '(map (lambda (n) (+ n 1)) '(1 2)) (current-environment)) env) '(2 3))
+  (check-equal? (eval-scheme '(eval '(map (lambda (n) (+ n 1)) '(1 2)) (the-global-environment)) env) '(2 3))
   (check-true (= (eval-scheme '(eval '((lambda (n) (+ n 1)) 1) (make-base-environment)) env) 2))
   (check-true (= (eval-scheme '(begin (define (add1 n) (+ n 1)) (add1 1)) env) 2))
   (check-true (= (eval-scheme '(begin (begin (define a 1)) a) env) 1))
