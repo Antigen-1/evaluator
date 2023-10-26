@@ -44,13 +44,7 @@
                      (make-define default:make-define)
                      (make-expression default:make-expression))
 
-         gen:if-form
-         gen:define-form
-         gen:set!-form
-         gen:begin-form
-         gen:quote-form
-         gen:lambda-form
-         gen:s-exp
+         gen:scheme-form
 
          make-example-base-environment
          eval-scheme
@@ -58,7 +52,7 @@
          apply-scheme
          (contract-out
           (make-primitive (-> procedure? exact-nonnegative-integer? any))
-          (make-optimal-base-environment (->* () ((listof (cons/c symbol? any/c)) #:expander (-> any/c (-> all-implement/c any) any)) any))
+          (make-optimal-base-environment (->* () ((listof (cons/c symbol? any/c)) #:expander (-> any/c (-> scheme-implement? any) any)) any))
           ))
 
 ;;Exceptions
@@ -165,79 +159,62 @@
 (begin-encourage-inline
   ;;Special forms
   ;;Only syntax are checked here
-  (define-generics define-form
-    (define? define-form)
-    (define-id define-form)
-    (define-val define-form)
-    #:defined-predicate define-implement?
+  (define-generics scheme-form
+    (define? scheme-form)
+    (define-id scheme-form)
+    (define-val scheme-form)
+
+    (set!? scheme-form)
+    (set!-id scheme-form)
+    (set!-val scheme-form)
+
+    (lambda? scheme-form)
+    (lambda-args scheme-form)
+    (lambda-body scheme-form)
+
+    (begin? scheme-form)
+    (begin-body scheme-form)
+
+    (quote? scheme-form)
+    (quote-datum scheme-form)
+
+    (if? scheme-form)
+    (if-test scheme-form)
+    (if-first-branch scheme-form)
+    (if-second-branch scheme-form)
+
+    (expression? scheme-form)
+    (expression-operator scheme-form)
+    (expression-operands scheme-form)
+    #:defined-predicate scheme-implement?
     #:fast-defaults ((default-representation?
                        (define (define? l) (eq? 'define (car l)))
                        (define (define-id f) (check-and-extract-form f (list 'define id _) id))
-                       (define (define-val f) (check-and-extract-form f (list 'define _ val) val)))))
-  (define-generics set!-form
-    (set!? set!-form)
-    (set!-id set!-form)
-    (set!-val set!-form)
-    #:defined-predicate set!-implement?
-    #:fast-defaults ((default-representation?
+                       (define (define-val f) (check-and-extract-form f (list 'define _ val) val))
+
                        (define (set!? l) (eq? 'set! (car l)))
                        (define (set!-id f) (check-and-extract-form f (list 'set! id _) id))
-                       (define (set!-val f) (check-and-extract-form f (list 'set! _ val) val)))))
-  (define-generics lambda-form
-    (lambda? lambda-form)
-    (lambda-args lambda-form)
-    (lambda-body lambda-form)
-    #:defined-predicate lambda-implement?
-    #:fast-defaults ((default-representation?
+                       (define (set!-val f) (check-and-extract-form f (list 'set! _ val) val))
+
                        (define (lambda? l) (eq? 'lambda (car l)))
                        (define (lambda-args f) (check-and-extract-form f (list 'lambda (list args ...) _ ...) args))
-                       (define (lambda-body f) (check-and-extract-form f (list 'lambda (list _ ...) body ...) body)))))
-  (define-generics begin-form
-    (begin? begin-form)
-    (begin-body begin-form)
-    #:defined-predicate begin-implement?
-    #:fast-defaults ((default-representation?
+                       (define (lambda-body f) (check-and-extract-form f (list 'lambda (list _ ...) body ...) body))
+
                        (define (begin? l) (eq? 'begin (car l)))
-                       (define (begin-body f) (check-and-extract-form f (list 'begin body ...) body)))))
-  (define-generics quote-form
-    (quote? quote-form)
-    (quote-datum quote-form)
-    #:defined-predicate quote-implement?
-    #:fast-defaults ((default-representation?
+                       (define (begin-body f) (check-and-extract-form f (list 'begin body ...) body))
+
                        (define (quote? l) (eq? 'quote (car l)))
-                       (define (quote-datum f) (check-and-extract-form f (list 'quote datum) datum)))))
-  (define-generics if-form
-    (if? if-form)
-    (if-test if-form)
-    (if-first-branch if-form)
-    (if-second-branch if-form)
-    #:defined-predicate if-implement?
-    #:fast-defaults ((default-representation?
+                       (define (quote-datum f) (check-and-extract-form f (list 'quote datum) datum))
+
                        (define (if? l) (eq? 'if (car l)))
                        (define (if-test f) (check-and-extract-form f (list 'if test first second) test))
                        (define (if-first-branch f) (check-and-extract-form f (list 'if test first second) first))
-                       (define (if-second-branch f) (check-and-extract-form f ((list 'if test first second) second) ((list 'if test first) _void))))))
+                       (define (if-second-branch f) (check-and-extract-form f ((list 'if test first second) second) ((list 'if test first) _void)))
 
-  ;;Scheme expression
-  (define-generics s-exp
-    (expression? s-exp)
-    (expression-operator s-exp)
-    (expression-operands s-exp)
-    #:defined-predicate s-exp-implement?
-    #:fast-defaults ((default-representation?
                        (define (expression? _) #t) ;;A non-empty list can always be considered as an expression
                        (define (expression-operator l) (car l))
                        (define (expression-operands l) (cdr l)))))
   )
-
-;;Contracts
-(define all-implement/c (and/c define-implement?
-                               set!-implement?
-                               begin-implement?
-                               if-implement?
-                               quote-implement?
-                               lambda-implement?
-                               s-exp-implement?))
 
 ;;Selectors with result checking
 (begin-encourage-inline
