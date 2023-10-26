@@ -291,10 +291,6 @@
 (begin-encourage-inline
   (define (delay-it o e)
     (__thunk o e))
-  (define (delay-constant c)
-    (define new (delay-it (lambda (_) c) #f))
-    (set-__thunk-arg! new (list 'constant 'lazy-memo))
-    new)
   (define (thunk-arg-set? thunk) (__thunk-arg thunk))
   (define (actual-value t)
     (define (evaluated-thunk? t) (__thunk-run? t))
@@ -315,6 +311,10 @@
   (define (cons-arg-val argument delayed)
     (define (lazy-argument? a) (and (list? a) (or (eq? (cadr a) 'lazy) (eq? (cadr a) 'lazy-memo))))
     (define (argument-name a) (if (scheme-variable? a) a (car a)))
+    (define (delay-constant c)
+      (define new (delay-it (lambda (_) c) #f))
+      (set-__thunk-arg! new (list 'constant 'lazy-memo))
+      new)
     (define (add-arg-to-thunk arg thunk)
       ;;Thunks with arg field set are treated as simple constants and delayed again
       (cond
