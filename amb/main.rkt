@@ -23,14 +23,14 @@
 ;; Code here
 
 (require racket/generic racket/match racket/contract (submod racket/performance-hint begin-encourage-inline) (for-syntax racket/base))
-(provide (struct-out exn:fail:scheme)
-         (struct-out exn:fail:scheme:syntax)
-         (struct-out exn:fail:scheme:syntax:primitive)
-         (struct-out exn:fail:scheme:syntax:unbound)
-         (struct-out exn:fail:scheme:contract)
-         (struct-out exn:fail:scheme:contract:arity)
-         (struct-out exn:fail:scheme:contract:applicable)
-         (struct-out exn:fail:scheme:ambiguous)
+(provide (struct-out exn:fail:amb)
+         (struct-out exn:fail:amb:syntax)
+         (struct-out exn:fail:amb:syntax:primitive)
+         (struct-out exn:fail:amb:syntax:unbound)
+         (struct-out exn:fail:amb:contract)
+         (struct-out exn:fail:amb:contract:arity)
+         (struct-out exn:fail:amb:contract:applicable)
+         (struct-out exn:fail:amb:ambiguous)
 
          (struct-out __void)
 
@@ -89,14 +89,14 @@
 
 ;;Exceptions
 (begin-encourage-inline
-  (struct exn:fail:scheme exn:fail ())
-  (struct exn:fail:scheme:syntax exn:fail:scheme ())
-  (struct exn:fail:scheme:syntax:primitive exn:fail:scheme:syntax ())
-  (struct exn:fail:scheme:syntax:unbound exn:fail:scheme:syntax ())
-  (struct exn:fail:scheme:contract exn:fail:scheme ())
-  (struct exn:fail:scheme:contract:arity exn:fail:scheme:contract ())
-  (struct exn:fail:scheme:contract:applicable exn:fail:scheme:contract ())
-  (struct exn:fail:scheme:ambiguous exn:fail:scheme ())
+  (struct exn:fail:amb exn:fail ())
+  (struct exn:fail:amb:syntax exn:fail:amb ())
+  (struct exn:fail:amb:syntax:primitive exn:fail:amb:syntax ())
+  (struct exn:fail:amb:syntax:unbound exn:fail:amb:syntax ())
+  (struct exn:fail:amb:contract exn:fail:amb ())
+  (struct exn:fail:amb:contract:arity exn:fail:amb:contract ())
+  (struct exn:fail:amb:contract:applicable exn:fail:amb:contract ())
+  (struct exn:fail:amb:ambiguous exn:fail:amb ())
   )
 
 ;;Macros
@@ -106,13 +106,13 @@
      #'(match val
          (pattern id)
          ...
-         (_ (raise (exn:fail:scheme:syntax:primitive (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))
+         (_ (raise (exn:fail:amb:syntax:primitive (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))
     ((_ val pattern id)
      #'(match val
          (pattern id)
-         (_ (raise (exn:fail:scheme:syntax:primitive (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))))
+         (_ (raise (exn:fail:amb:syntax:primitive (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))))
 (define-syntax-rule (contract-monitor body ...)
-  (with-handlers ((exn:fail:contract? (lambda (e) (raise (exn:fail:scheme:contract (exn-message e) (exn-continuation-marks e))))))
+  (with-handlers ((exn:fail:contract? (lambda (e) (raise (exn:fail:amb:contract (exn-message e) (exn-continuation-marks e))))))
     body ...))
 
 ;;Structures
@@ -133,8 +133,8 @@
 (begin-encourage-inline
   (define (not-define? f) (or (scheme-self-evaluating? f) (scheme-variable? f) (not (define? f))))
   (define (non-empty-list? l) (and (list? l) (not (null? l))))
-  (define (check-primitive-part n v pred) (cond ((pred v) v) (else (raise (exn:fail:scheme:syntax:primitive (format "Malformed ~a: ~s" n v) (current-continuation-marks))))))
-  (define (raise-arity op args vals) (raise (exn:fail:scheme:contract:arity (format "~a:\nArity mismatch:\nexpected: ~a\nactual: ~a" op args vals) (current-continuation-marks))))
+  (define (check-primitive-part n v pred) (cond ((pred v) v) (else (raise (exn:fail:amb:syntax:primitive (format "Malformed ~a: ~s" n v) (current-continuation-marks))))))
+  (define (raise-arity op args vals) (raise (exn:fail:amb:contract:arity (format "~a:\nArity mismatch:\nexpected: ~a\nactual: ~a" op args vals) (current-continuation-marks))))
   (define (filter-split proc lst)
     (define r (foldl (lambda (e p) (if (proc e) (cons (cons e (car p)) (cdr p)) (cons (car p) (cons e (cdr p))))) (cons null null) (reverse lst)))
     (values (car r) (cdr r)))
@@ -170,7 +170,7 @@
   ;;Environments
   (define (make-env assocs #:expander expander) (__environment (list (make-frame assocs)) expander))
   (define (add-frame env assocs) (struct-copy __environment env (frames (cons (make-frame assocs) (__environment-frames env)))))
-  (define (raise-unbound id) (raise (exn:fail:scheme:syntax:unbound (format "~a is not bound" id) (current-continuation-marks))))
+  (define (raise-unbound id) (raise (exn:fail:amb:syntax:unbound (format "~a is not bound" id) (current-continuation-marks))))
   (define (lookup-variable env id)
     (let/cc return
       (for ((t (in-list (__environment-frames env))))
@@ -343,11 +343,11 @@
                       ((amb? f) (make-amb (map (lambda (c) (plain-expand c e)) (n:amb-choices f))))
                       ((expression? f) (make-expression (plain-expand (n:expression-operator f) e)
                                                         (map (lambda (f) (plain-expand f e)) (n:expression-operands f))))
-                      (else (raise (exn:fail:scheme:syntax (format "Malformed form: ~s" f) (current-continuation-marks)))))))
+                      (else (raise (exn:fail:amb:syntax (format "Malformed form: ~s" f) (current-continuation-marks)))))))
              (expand-amb
               (lambda (f e)
                 ;;Checking
-                (cond ((not (__environment? e)) (raise (exn:fail:scheme:contract (format "~s is not an environment value" e) (current-continuation-marks)))))
+                (cond ((not (__environment? e)) (raise (exn:fail:amb:contract (format "~s is not an environment value" e) (current-continuation-marks)))))
                 ;;Expansion
                 (plain-expand f e)))
 
@@ -433,7 +433,7 @@
                              fail1))
                           fail)))
 
-                      (else (raise (exn:fail:scheme:syntax (format "Malformed form: ~s" exp)) (current-continuation-marks))))))
+                      (else (raise (exn:fail:amb:syntax (format "Malformed form: ~s" exp)) (current-continuation-marks))))))
 
              (eval-primitive-form (lambda (exp env succeed fail) ((analyze-primitive-form exp) env succeed fail)))
              (plain-eval (lambda (exp env succeed fail) (eval-primitive-form (expand-amb exp env) env succeed fail)))
@@ -443,9 +443,9 @@
                 ;;Checking
                 (define-values (operands-num operands-list)
                   (cond ((arguments? operands) (get-arguments-num-list operands))
-                        (else (raise (exn:fail:scheme:contract (format "~s cannot be supplied as by-position arguments" operands) (current-continuation-marks))))))
+                        (else (raise (exn:fail:amb:contract (format "~s cannot be supplied as by-position arguments" operands) (current-continuation-marks))))))
                 (cond ((not (scheme-procedure? operator))
-                       (raise (exn:fail:scheme:contract:applicable (format "~s is not an applicable object" operator) (current-continuation-marks))))
+                       (raise (exn:fail:amb:contract:applicable (format "~s is not an applicable object" operator) (current-continuation-marks))))
                       ((not (= (get-procedure-arity operator) operands-num))
                        (raise-arity operator (get-procedure-arity operator) operands-num)))
                 ;;Application
@@ -457,7 +457,7 @@
 
              ;;Default success and failure handlers
              (default-succeed (lambda (v _) v))
-             (default-fail (lambda () (raise (exn:fail:scheme:ambiguous "There are no more choices" (current-continuation-marks)))))
+             (default-fail (lambda () (raise (exn:fail:amb:ambiguous "There are no more choices" (current-continuation-marks)))))
 
              ;;Exported environment constructors
              (fixed-bindings
@@ -600,8 +600,11 @@
                               #f
                               (if (proc (car list)) #t (ormap proc (cdr list)))))))
                     (define reverse (let ((cons cons) (null null) (foldl foldl)) (lambda (l) (foldl cons null l))))
-                    (define map (let ((cons cons) (foldl foldl) (null null)) (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l)))))
-                    (define member (let ((car car) (cdr cdr)) (lambda (val items cpr) (cond ((null? items) #f) ((cpr (car items) val) items) (else (member val (cdr items) cpr))))))
+                    (define map (let ((cons cons) (foldl foldl) (null null) (reverse reverse)) (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l)))))
+                    (define member (let ((car car) (cdr cdr) (null? null?)) (lambda (val items cpr) (cond ((null? items) #f) ((cpr (car items) val) items) (else (member val (cdr items) cpr))))))
+                    (define filter (let ((cons cons) (null null) (foldl foldl) (reverse reverse)) (lambda (pred ls) (reverse (foldl (lambda (v s) (if (pred v) (cons v s) s)) null ls)))))
+                    (define append (let ((foldl foldl) (cons cons) (reverse reverse)) (lambda (l1 l2) (foldl cons l2 (reverse l1)))))
+                    (define append* (let ((foldl foldl) (append append) (null null)) (lambda (ll) (foldl append null (reverse ll)))))
                     )
                  new
                  default-succeed
@@ -635,17 +638,17 @@
   (check-true (expression? (default:make-expression '+ '(2 2))))
   ;;Exceptions
   (check-not-exn (lambda () (expand-amb (list (list 1)) (make-optimal-base-environment))))
-  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (checked:set!-id (default:make-set! '(+ 1 2) 3))))
-  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (checked:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
-  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (checked:begin-body (default:make-begin null))))
-  (check-exn exn:fail:scheme:syntax:primitive? (lambda () (checked:define-val (default:make-define 'a (default:make-define 'b 1)))))
-  (check-exn exn:fail:scheme:syntax:unbound? (lambda () (eval-amb '(+) (make-optimal-base-environment))))
-  (check-exn exn:fail:scheme:contract:applicable? (lambda () (eval-amb '(+) (make-optimal-base-environment (list (cons '+ 0))))))
-  (check-exn exn:fail:scheme:contract:arity? (lambda () (eval-amb '((lambda (n) (+ n 1))) (make-optimal-base-environment (list (cons '+ (make-primitive + 2)))))))
-  (check-exn exn:fail:scheme:contract? (lambda () (eval-amb '(+ "") (make-optimal-base-environment (list (cons '+ (make-primitive + 1)))))))
-  (check-exn exn:fail:scheme:contract? (lambda () (eval-amb '(+ 1 2) null)))
-  (check-exn exn:fail:scheme:contract? (lambda () (expand-amb '(+ 1 2) null)))
-  (check-exn exn:fail:scheme:contract? (lambda () (apply-amb (eval-amb '(lambda () 1) (make-example-base-environment)) (vector))))
+  (check-exn exn:fail:amb:syntax:primitive? (lambda () (checked:set!-id (default:make-set! '(+ 1 2) 3))))
+  (check-exn exn:fail:amb:syntax:primitive? (lambda () (checked:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
+  (check-exn exn:fail:amb:syntax:primitive? (lambda () (checked:begin-body (default:make-begin null))))
+  (check-exn exn:fail:amb:syntax:primitive? (lambda () (checked:define-val (default:make-define 'a (default:make-define 'b 1)))))
+  (check-exn exn:fail:amb:syntax:unbound? (lambda () (eval-amb '(+) (make-optimal-base-environment))))
+  (check-exn exn:fail:amb:contract:applicable? (lambda () (eval-amb '(+) (make-optimal-base-environment (list (cons '+ 0))))))
+  (check-exn exn:fail:amb:contract:arity? (lambda () (eval-amb '((lambda (n) (+ n 1))) (make-optimal-base-environment (list (cons '+ (make-primitive + 2)))))))
+  (check-exn exn:fail:amb:contract? (lambda () (eval-amb '(+ "") (make-optimal-base-environment (list (cons '+ (make-primitive + 1)))))))
+  (check-exn exn:fail:amb:contract? (lambda () (eval-amb '(+ 1 2) null)))
+  (check-exn exn:fail:amb:contract? (lambda () (expand-amb '(+ 1 2) null)))
+  (check-exn exn:fail:amb:contract? (lambda () (apply-amb (eval-amb '(lambda () 1) (make-example-base-environment)) (vector))))
   ;;Selectors
   (check-eq? (checked:define-id (default:make-define 'a 1)) 'a)
   (check-equal? (checked:if-test (default:make-if '(+ 1 2) 1 2)) '(+ 1 2))
@@ -723,55 +726,56 @@
   (eval benchmark2 ns)
   (define benchmark3
     '(begin
-       (define amb-first-possibility
+       (define optimal-multiple-dwelling
          (time
           (eval-amb
-           '(let ((baker (amb 1 2 3 4 5))
-                  (fletcher (amb 1 2 3 4 5))
-                  (smith (amb 1 2 3 4 5))
-                  (cooper (amb 1 2 3 4 5))
-                  (miller (amb 1 2 3 4 5)))
-              (define names '(baker fletcher smith cooper miller))
-              (define results (cons baker (cons fletcher (cons smith (cons cooper (cons miller null))))))
-              (define (distinct? items)
-                (cond ((null? items) #t)
-                      ((null? (cdr items)) #t)
-                      ((member (car items) (cdr items) =) #f)
-                      (else (distinct? (cdr items)))))
-              (define (map* proc ll)
-                (if (ormap null? ll)
-                    null
-                    (cons (apply proc (map car ll)) (map* proc (map cdr ll)))))
-              (require (distinct? results))
+           '(let ((baker (amb 1 2 3 4 5)))
               (require (not (= baker 5)))
-              (require (not (= cooper 1)))
-              (require (and (not (= fletcher 1)) (not (= fletcher 5))))
-              (require (> miller cooper))
-              (require (not (= (abs (- smith fletcher)) 1)))
-              (require (not (= (abs (- fletcher cooper)) 1)))
-              (map* cons (cons names (cons results null))))
+              (let ((fletcher (amb 1 2 3 4 5)))
+                (require (and (not (= fletcher baker)) (not (= fletcher 1)) (not (= fletcher 5))))
+                (let ((smith (amb 1 2 3 4 5)))
+                  (require (and (not (= smith baker)) (not (= smith fletcher)) (not (= (abs (- smith fletcher)) 1))))
+                  (let ((cooper (amb 1 2 3 4 5)))
+                    (require (and (not (= cooper baker)) (not (= cooper fletcher)) (not (= cooper smith)) (not (= (abs (- fletcher cooper)) 1)) (not (= cooper 1))))
+                    (let ((miller (amb 1 2 3 4 5)))
+                      (require (and (not (= miller baker)) (not (= miller fletcher)) (not (= miller smith)) #;(not (= miller cooper)) (> miller cooper)))
+                      (define names '(baker fletcher smith cooper miller))
+                      (define results (cons baker (cons fletcher (cons smith (cons cooper (cons miller null))))))
+                      (define (map* proc ll)
+                        (if (ormap null? ll)
+                            null
+                            (cons (apply proc (map car ll)) (map* proc (map cdr ll)))))
+                      (map* cons (cons names (cons results null))))))))
            (make-example-base-environment))))
-       (define racket-first-possibility
+       (define typical-multiple-dwelling
          (time
-          (eval
+          (eval-amb
            '(let ((baker '(1 2 3 4 5))
                   (fletcher '(1 2 3 4 5))
                   (smith '(1 2 3 4 5))
                   (cooper '(1 2 3 4 5))
                   (miller '(1 2 3 4 5)))
-              (define all (cartesian-product baker fletcher smith cooper miller))
               (define (distinct? items)
                 (cond ((null? items) #t)
                       ((null? (cdr items)) #t)
                       ((member (car items) (cdr items) =) #f)
                       (else (distinct? (cdr items)))))
-              (map
-               cons
-               '(baker fletcher smith cooper miller)
-               (car
-                (filter (lambda (p)
-                          (match p
-                            ((list baker fletcher smith cooper miller)
+              (define (cartesian-product ll)
+                (if (null? ll)
+                    '(())
+                    (append* (map (lambda (v) (map (lambda (r) (cons v r)) (cartesian-product (cdr ll)))) (car ll)))))
+              (define (map* proc ll)
+                (if (ormap null? ll)
+                    null
+                    (cons (apply proc (map car ll)) (map* proc (map cdr ll)))))
+              (define first
+                (car
+                 (filter (lambda (p)
+                           (let ((baker (car p))
+                                 (fletcher (car (cdr p)))
+                                 (smith (car (cdr (cdr p))))
+                                 (cooper (car (cdr (cdr (cdr p)))))
+                                 (miller (car (cdr (cdr (cdr (cdr p)))))))
                              (and (distinct? p)
                                   (not (= baker 5))
                                   (not (= cooper 1))
@@ -779,8 +783,10 @@
                                   (not (= fletcher 5))
                                   (> miller cooper)
                                   (not (= 1 (abs (- smith fletcher))))
-                                  (not (= 1 (abs (- fletcher cooper))))))))
-                        all)))))))
-       (check-equal? amb-first-possibility racket-first-possibility)))
+                                  (not (= 1 (abs (- fletcher cooper)))))))
+                         (cartesian-product (cons baker (cons fletcher (cons smith (cons cooper (cons miller null)))))))))
+              (map* cons (cons '(baker fletcher smith cooper miller) (cons first null))))
+           (make-example-base-environment))))
+       (check-equal? optimal-multiple-dwelling typical-multiple-dwelling)))
   (pretty-write benchmark3)
   (eval benchmark3 ns))

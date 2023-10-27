@@ -576,8 +576,11 @@
                               #f
                               (if (proc (car list)) #t (ormap proc (cdr list)))))))
                     (define reverse (let ((cons cons) (null null) (foldl foldl)) (lambda (l) (foldl cons null l))))
-                    (define map (let ((cons cons) (foldl foldl) (null null)) (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l)))))
-                    (define member (let ((car car) (cdr cdr)) (lambda (val items cpr) (cond ((null? items) #f) ((cpr (car items) val) items) (else (member val (cdr items) cpr))))))
+                    (define map (let ((cons cons) (foldl foldl) (null null) (reverse reverse)) (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l)))))
+                    (define member (let ((car car) (cdr cdr) (null? null?)) (lambda (val items cpr) (cond ((null? items) #f) ((cpr (car items) val) items) (else (member val (cdr items) cpr))))))
+                    (define filter (let ((cons cons) (null null) (foldl foldl) (reverse reverse)) (lambda (pred ls) (reverse (foldl (lambda (v s) (if (pred v) (cons v s) s)) null ls)))))
+                    (define append (let ((foldl foldl) (cons cons) (reverse reverse)) (lambda (l1 l2) (foldl cons l2 (reverse l1)))))
+                    (define append* (let ((foldl foldl) (append append) (null null)) (lambda (ll) (foldl append null (reverse ll)))))
                     )
                  new)
                 new)))
