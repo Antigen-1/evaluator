@@ -79,12 +79,12 @@
          gen:amb-form
 
          make-example-base-environment
-         eval-scheme
-         expand-scheme
-         apply-scheme
+         eval-amb
+         expand-amb
+         apply-amb
          (contract-out
           (make-primitive (-> procedure? exact-nonnegative-integer? any))
-          (make-optimal-base-environment (->* () ((listof (cons/c symbol? any/c)) #:expander (-> any/c (-> scheme-implement? any) any)) any))
+          (make-optimal-base-environment (->* () ((listof (cons/c symbol? any/c)) #:succeed (-> any/c any/c any) #:fail (-> any) #:expander (-> any/c (-> scheme-implement? any) any)) any))
           ))
 
 ;;Exceptions
@@ -182,7 +182,7 @@
   (define (assign-variable! env id val)
     (let/cc break
       (for ((t (in-list (__environment-frames env))))
-        (cond ((has-id? t id) (set-frame! t id val) (break _void))))
+        (cond ((has-id? t id) (set-frame! t id val) (break (refer-frame t id)))))
       (raise-unbound id)))
   )
 
@@ -242,8 +242,8 @@
                        (define (quote-datum f) (check-and-extract-form f (list 'quote datum) datum))
 
                        (define (if? l) (eq? 'if (car l)))
-                       (define (if-test f) (check-and-extract-form f (list 'if test first second) test))
-                       (define (if-first-branch f) (check-and-extract-form f (list 'if test first second) first))
+                       (define (if-test f) (check-and-extract-form f (list 'if test _ ...) test))
+                       (define (if-first-branch f) (check-and-extract-form f ((list 'if test first second) first) ((list 'if test first) first)))
                        (define (if-second-branch f) (check-and-extract-form f ((list 'if test first second) second) ((list 'if test first) _void)))
 
                        (define (amb? l) (eq? 'amb (car l)))
@@ -301,7 +301,7 @@
 
 ;;Expansion, evaluation and application
 (begin-encourage-inline
-  (define-values (expand-scheme eval-scheme apply-scheme make-optimal-base-environment make-example-base-environment)
+  (define-values (expand-amb eval-amb apply-amb make-optimal-base-environment make-example-base-environment)
     (letrec ((expand-primitive-internal-sequence ;;Scan out all internal definitions
               (lambda (l)
                 (define (define->set d) (make-set! (define-id d) (define-val d)))
@@ -340,11 +340,11 @@
                       ((lambda? f) (make-lambda (n:lambda-args f)
                                                 (expand-primitive-internal-sequence (map (lambda (f) (plain-expand f e)) (n:lambda-body f)))))
                       ((quote? f) f)
-                      ((amb? f) (make-amb (map plain-expand (n:amb-choices f))))
+                      ((amb? f) (make-amb (map (lambda (c) (plain-expand c e)) (n:amb-choices f))))
                       ((expression? f) (make-expression (plain-expand (n:expression-operator f) e)
                                                         (map (lambda (f) (plain-expand f e)) (n:expression-operands f))))
                       (else (raise (exn:fail:scheme:syntax (format "Malformed form: ~s" f) (current-continuation-marks)))))))
-             (expand-scheme
+             (expand-amb
               (lambda (f e)
                 ;;Checking
                 (cond ((not (__environment? e)) (raise (exn:fail:scheme:contract (format "~s is not an environment value" e) (current-continuation-marks)))))
@@ -398,9 +398,8 @@
                          (val-proc
                           env
                           (lambda (v fail1)
-                            (let ((old (lookup-variable env id)))
-                              (succeed (assign-variable! env id v)
-                                       (lambda () (assign-variable! env id old)))))
+                            (define old (assign-variable! env id v))
+                            (succeed _void (lambda () (assign-variable! env id old) (fail1))))
                           fail)))
                       ((define? exp)
                        (define id (define-id exp))
@@ -437,7 +436,7 @@
                       (else (raise (exn:fail:scheme:syntax (format "Malformed form: ~s" exp)) (current-continuation-marks))))))
 
              (eval-primitive-form (lambda (exp env succeed fail) ((analyze-primitive-form exp) env succeed fail)))
-             (plain-eval (lambda (exp env succeed fail) (eval-primitive-form (expand-scheme exp env) env succeed fail)))
+             (plain-eval (lambda (exp env succeed fail) (eval-primitive-form (expand-amb exp env) env succeed fail)))
 
              (plain-apply
               (lambda (operator operands succeed fail)
@@ -462,7 +461,7 @@
 
              ;;Exported environment constructors
              (fixed-bindings
-              (list (cons 'expand (make-primitive expand-scheme 2))))
+              (list (cons 'expand (make-primitive expand-amb 2))))
              (make-optimal-base-environment
               (lambda ((assoc null) #:succeed (succeed default-succeed) #:fail (fail default-fail) #:expander (expander (lambda _ #f)))
                 (define new
@@ -504,6 +503,7 @@
                     (cons 'bytes>? (make-primitive bytes>? 2))
                     (cons 'bytes<? (make-primitive bytes<? 2))
                     (cons 'bytes-ref (make-primitive bytes-ref 2))
+                    (cons 'not (make-primitive not 1))
                     ;;Renamed
                     (cons 'primitive? (make-primitive scheme-primitive? 1))
                     (cons 'procedure? (make-primitive scheme-procedure? 1))
@@ -551,6 +551,14 @@
                                                                  'temp)))))))))
                   ((list 'cons-stream a d)
                    (c (make-let (list (list 'immed a) (list 'promise (make-delay d))) (list (make-lambda '(proc) (list (make-expression 'proc (list 'immed 'promise))))))))
+                  ((list 'and branches ...)
+                   (c (foldl (lambda (b t) (make-let (list (list 'test b)) (list (make-if 'test t 'test))))
+                             'test
+                             (reverse branches))))
+                  ((list 'or branches)
+                   (c (foldl (lambda (b e) (make-let (list (list 'test b)) (list (make-if 'test 'test e))))
+                             'test
+                             (reverse branches))))
                   (_ #f))))
              (make-example-base-environment
               (lambda (#:fail (fail default-fail) #:succeed (succeed default-succeed))
@@ -560,6 +568,8 @@
                 (plain-eval
                  '(begin
                     ;;All protected
+                    (define require (let ((not not)) (lambda (test) (if (not test) (amb)))))
+
                     (define (force promise) (promise))
                     (define stream-car (let ((scar (lambda (a d) a))) (lambda (s) (s scar))))
                     (define stream-cdr (let* ((force force) (scdr (lambda (a d) (force d)))) (lambda (s) (s scdr))))
@@ -569,6 +579,7 @@
                     (define add1 (let ((+ +)) (lambda (n) (+ n 1))))
                     (define sub1 (let ((- -)) (lambda (n) (- n 1))))
                     (define minus (let ((- -)) (lambda (n) (- 0 n))))
+                    (define abs (let ((>= >=) (minus minus)) (lambda (n) (if (>= n 0) n (minus n)))))
 
                     (define foldl
                       (let ((null? null?) (car car) (cdr cdr))
@@ -590,12 +601,13 @@
                               (if (proc (car list)) #t (ormap proc (cdr list)))))))
                     (define reverse (let ((cons cons) (null null) (foldl foldl)) (lambda (l) (foldl cons null l))))
                     (define map (let ((cons cons) (foldl foldl) (null null)) (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l)))))
+                    (define member (let ((car car) (cdr cdr)) (lambda (val items cpr) (cond ((null? items) #f) ((cpr (car items) val) items) (else (member val (cdr items) cpr))))))
                     )
                  new
                  default-succeed
                  default-fail)
                 new)))
-      (values expand-scheme
+      (values expand-amb
               (lambda (exp env (succeed default-succeed) (fail default-fail))
                 (contract-monitor (plain-eval exp env succeed fail)))
               (lambda (operator operands (succeed default-succeed) (fail default-fail))
@@ -622,36 +634,36 @@
   (check-true (scheme-procedure? (make-primitive + 2)))
   (check-true (expression? (default:make-expression '+ '(2 2))))
   ;;Exceptions
-  (check-not-exn (lambda () (expand-scheme (list (list 1)) (make-optimal-base-environment))))
+  (check-not-exn (lambda () (expand-amb (list (list 1)) (make-optimal-base-environment))))
   (check-exn exn:fail:scheme:syntax:primitive? (lambda () (checked:set!-id (default:make-set! '(+ 1 2) 3))))
   (check-exn exn:fail:scheme:syntax:primitive? (lambda () (checked:lambda-args (default:make-lambda '(+ 1) '((+ 1 2))))))
   (check-exn exn:fail:scheme:syntax:primitive? (lambda () (checked:begin-body (default:make-begin null))))
   (check-exn exn:fail:scheme:syntax:primitive? (lambda () (checked:define-val (default:make-define 'a (default:make-define 'b 1)))))
-  (check-exn exn:fail:scheme:syntax:unbound? (lambda () (eval-scheme '(+) (make-optimal-base-environment))))
-  (check-exn exn:fail:scheme:contract:applicable? (lambda () (eval-scheme '(+) (make-optimal-base-environment (list (cons '+ 0))))))
-  (check-exn exn:fail:scheme:contract:arity? (lambda () (eval-scheme '((lambda (n) (+ n 1))) (make-optimal-base-environment (list (cons '+ (make-primitive + 2)))))))
-  (check-exn exn:fail:scheme:contract? (lambda () (eval-scheme '(+ "") (make-optimal-base-environment (list (cons '+ (make-primitive + 1)))))))
-  (check-exn exn:fail:scheme:contract? (lambda () (eval-scheme '(+ 1 2) null)))
-  (check-exn exn:fail:scheme:contract? (lambda () (expand-scheme '(+ 1 2) null)))
-  (check-exn exn:fail:scheme:contract? (lambda () (apply-scheme (eval-scheme '(lambda () 1) (make-example-base-environment)) (vector))))
+  (check-exn exn:fail:scheme:syntax:unbound? (lambda () (eval-amb '(+) (make-optimal-base-environment))))
+  (check-exn exn:fail:scheme:contract:applicable? (lambda () (eval-amb '(+) (make-optimal-base-environment (list (cons '+ 0))))))
+  (check-exn exn:fail:scheme:contract:arity? (lambda () (eval-amb '((lambda (n) (+ n 1))) (make-optimal-base-environment (list (cons '+ (make-primitive + 2)))))))
+  (check-exn exn:fail:scheme:contract? (lambda () (eval-amb '(+ "") (make-optimal-base-environment (list (cons '+ (make-primitive + 1)))))))
+  (check-exn exn:fail:scheme:contract? (lambda () (eval-amb '(+ 1 2) null)))
+  (check-exn exn:fail:scheme:contract? (lambda () (expand-amb '(+ 1 2) null)))
+  (check-exn exn:fail:scheme:contract? (lambda () (apply-amb (eval-amb '(lambda () 1) (make-example-base-environment)) (vector))))
   ;;Selectors
   (check-eq? (checked:define-id (default:make-define 'a 1)) 'a)
   (check-equal? (checked:if-test (default:make-if '(+ 1 2) 1 2)) '(+ 1 2))
   (check-equal? (checked:quote-datum (default:make-quote '(1 . 2))) '(1 . 2))
   ;;Expansion, evaluation and application
   (define env (make-example-base-environment))
-  (check-true (= (eval-scheme '((lambda (n) (cond ((>= n 0) n) (else (minus n)))) -1) env) 1))
-  (check-true (= (eval-scheme '(apply + (map (lambda (v) (* v (+ v -1))) '(1 2))) env) 2))
-  (check-true (= (apply-scheme (eval-scheme '(lambda (a) (set! a 1) a) env) (list 0)) 1))
-  (check-equal? (expand-scheme '(let ((a 1)) (+ a 1)) env) '((lambda (a) (+ a 1)) 1))
-  (check-equal? (expand-scheme '(let* ((a 1) (b (+ a 1))) (+ a b)) env) '((lambda (a) ((lambda (b) (+ a b)) (+ a 1))) 1))
-  (check-true (= (eval-scheme '(eval '((lambda (n) (+ n 1)) 1) (make-base-environment)) env) 2))
-  (check-equal? (eval-scheme '(eval '(map (lambda (n) (add1 n)) '(1 2)) (the-global-environment)) env) '(2 3))
-  (check-true (= (eval-scheme '(begin (define (add1 n) (+ n 1)) (add1 1)) env) 2))
-  (check-true (= (eval-scheme '(begin (begin (define a 1)) a) env) 1))
-  (check-true (= (eval-scheme '(begin (begin (define b 1)) (define c 2) (begin (+ b c))) env) 3))
-  (check-true (= (eval-scheme '(force (delay (+ 1 2))) env) 3))
-  (check-true (= (eval-scheme '(stream-cdr (cons-stream 1 2)) env) 2))
+  (check-true (= (eval-amb '((lambda (n) (cond ((>= n 0) n) (else (minus n)))) -1) env) 1))
+  (check-true (= (eval-amb '(apply + (map (lambda (v) (* v (+ v -1))) '(1 2))) env) 2))
+  (check-true (= (apply-amb (eval-amb '(lambda (a) (set! a 1) a) env) (list 0)) 1))
+  (check-equal? (expand-amb '(let ((a 1)) (+ a 1)) env) '((lambda (a) (+ a 1)) 1))
+  (check-equal? (expand-amb '(let* ((a 1) (b (+ a 1))) (+ a b)) env) '((lambda (a) ((lambda (b) (+ a b)) (+ a 1))) 1))
+  (check-true (= (eval-amb '(eval '((lambda (n) (+ n 1)) 1) (make-base-environment)) env) 2))
+  (check-equal? (eval-amb '(eval '(map (lambda (n) (add1 n)) '(1 2)) (the-global-environment)) env) '(2 3))
+  (check-true (= (eval-amb '(begin (define (add1 n) (+ n 1)) (add1 1)) env) 2))
+  (check-true (= (eval-amb '(begin (begin (define a 1)) a) env) 1))
+  (check-true (= (eval-amb '(begin (begin (define b 1)) (define c 2) (begin (+ b c))) env) 3))
+  (check-true (= (eval-amb '(force (delay (+ 1 2))) env) 3))
+  (check-true (= (eval-amb '(stream-cdr (cons-stream 1 2)) env) 2))
   ;;Benchmark
   (define-runtime-module-path-index namespace-module '(submod ".." namespace))
   (define-namespace-anchor anchor)
@@ -660,13 +672,13 @@
     '(begin
        (define scheme-traverse
          (time
-          (eval-scheme
+          (eval-amb
            '(lambda (l) (reverse (map add1 l)))
            (make-example-base-environment))))
        (define racket-traverse
          (time (eval '(lambda (l) (reverse (map add1 l))))))
        (let ((lst (range 0 200000)))
-         (check-equal? (time (apply-scheme scheme-traverse (list lst)))
+         (check-equal? (time (apply-amb scheme-traverse (list lst)))
                        (time (apply racket-traverse (list lst)))))))
   (pretty-write benchmark1)
   (eval benchmark1 ns)
@@ -674,7 +686,7 @@
     '(begin
        (define scheme-pi-stream-10000th
          (time
-          (eval-scheme
+          (eval-amb
            '(begin
               (define streams-empty?
                 (lambda (sl)
@@ -708,4 +720,67 @@
                    (* 4 (stream-ref pi-stream 9999))))))
        (check-true (= racket-pi-stream-10000th scheme-pi-stream-10000th))))
   (pretty-write benchmark2)
-  (eval benchmark2 ns))
+  (eval benchmark2 ns)
+  (define benchmark3
+    '(begin
+       (define amb-first-possibility
+         (time
+          (eval-amb
+           '(let ((baker (amb 1 2 3 4 5))
+                  (fletcher (amb 1 2 3 4 5))
+                  (smith (amb 1 2 3 4 5))
+                  (cooper (amb 1 2 3 4 5))
+                  (miller (amb 1 2 3 4 5)))
+              (define names '(baker fletcher smith cooper miller))
+              (define results (cons baker (cons fletcher (cons smith (cons cooper (cons miller null))))))
+              (define (distinct? items)
+                (cond ((null? items) #t)
+                      ((null? (cdr items)) #t)
+                      ((member (car items) (cdr items) =) #f)
+                      (else (distinct? (cdr items)))))
+              (define (map* proc ll)
+                (if (ormap null? ll)
+                    null
+                    (cons (apply proc (map car ll)) (map* proc (map cdr ll)))))
+              (require (distinct? results))
+              (require (not (= baker 5)))
+              (require (not (= cooper 1)))
+              (require (and (not (= fletcher 1)) (not (= fletcher 5))))
+              (require (> miller cooper))
+              (require (not (= (abs (- smith fletcher)) 1)))
+              (require (not (= (abs (- fletcher cooper)) 1)))
+              (map* cons (cons names (cons results null))))
+           (make-example-base-environment))))
+       (define racket-first-possibility
+         (time
+          (eval
+           '(let ((baker '(1 2 3 4 5))
+                  (fletcher '(1 2 3 4 5))
+                  (smith '(1 2 3 4 5))
+                  (cooper '(1 2 3 4 5))
+                  (miller '(1 2 3 4 5)))
+              (define all (cartesian-product baker fletcher smith cooper miller))
+              (define (distinct? items)
+                (cond ((null? items) #t)
+                      ((null? (cdr items)) #t)
+                      ((member (car items) (cdr items) =) #f)
+                      (else (distinct? (cdr items)))))
+              (map
+               cons
+               '(baker fletcher smith cooper miller)
+               (car
+                (filter (lambda (p)
+                          (match p
+                            ((list baker fletcher smith cooper miller)
+                             (and (distinct? p)
+                                  (not (= baker 5))
+                                  (not (= cooper 1))
+                                  (not (= fletcher 1))
+                                  (not (= fletcher 5))
+                                  (> miller cooper)
+                                  (not (= 1 (abs (- smith fletcher))))
+                                  (not (= 1 (abs (- fletcher cooper))))))))
+                        all)))))))
+       (check-equal? amb-first-possibility racket-first-possibility)))
+  (pretty-write benchmark3)
+  (eval benchmark3 ns))

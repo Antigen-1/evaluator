@@ -235,8 +235,8 @@
                        (define (quote-datum f) (check-and-extract-form f (list 'quote datum) datum))
 
                        (define (if? l) (eq? 'if (car l)))
-                       (define (if-test f) (check-and-extract-form f (list 'if test first second) test))
-                       (define (if-first-branch f) (check-and-extract-form f (list 'if test first second) first))
+                       (define (if-test f) (check-and-extract-form f (list 'if test _ ...) test))
+                       (define (if-first-branch f) (check-and-extract-form f ((list 'if test first second) first) ((list 'if test first) first)))
                        (define (if-second-branch f) (check-and-extract-form f ((list 'if test first second) second) ((list 'if test first) _void)))
 
                        (define (expression? _) #t) ;;A non-empty list can always be considered as an expression
@@ -501,6 +501,7 @@
                     (cons 'bytes>? (make-primitive bytes>? 2))
                     (cons 'bytes<? (make-primitive bytes<? 2))
                     (cons 'bytes-ref (make-primitive bytes-ref 2))
+                    (cons 'not (make-primitive not 1))
                     ;;Renamed
                     (cons 'primitive? (make-primitive scheme-primitive? 1))
                     (cons 'procedure? (make-primitive scheme-procedure? 1))
@@ -531,6 +532,14 @@
                              _void
                              (reverse test)
                              (reverse body))))
+                  ((list 'and branches ...)
+                   (c (foldl (lambda (b t) (make-let (list (list 'test b)) (list (make-if 'test t 'test))))
+                             'test
+                             (reverse branches))))
+                  ((list 'or branches)
+                   (c (foldl (lambda (b e) (make-let (list (list 'test b)) (list (make-if 'test 'test e))))
+                             'test
+                             (reverse branches))))
                   (_ #f))))
              (make-example-base-environment
               (lambda ()
@@ -546,6 +555,7 @@
                     (define add1 (let ((+ +)) (lambda (n) (+ n 1))))
                     (define sub1 (let ((- -)) (lambda (n) (- n 1))))
                     (define minus (let ((- -)) (lambda (n) (- 0 n))))
+                    (define abs (let ((>= >=) (minus minus)) (lambda (n) (if (>= n 0) n (minus n)))))
 
                     (define foldl
                       (let ((null? null?) (car car) (cdr cdr))
@@ -567,6 +577,7 @@
                               (if (proc (car list)) #t (ormap proc (cdr list)))))))
                     (define reverse (let ((cons cons) (null null) (foldl foldl)) (lambda (l) (foldl cons null l))))
                     (define map (let ((cons cons) (foldl foldl) (null null)) (lambda (proc l) (reverse (foldl (lambda (e i) (cons (proc e) i)) null l)))))
+                    (define member (let ((car car) (cdr cdr)) (lambda (val items cpr) (cond ((null? items) #f) ((cpr (car items) val) items) (else (member val (cdr items) cpr))))))
                     )
                  new)
                 new)))
