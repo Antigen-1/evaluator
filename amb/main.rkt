@@ -22,7 +22,7 @@
 
 ;; Code here
 
-(require racket/generic racket/match racket/contract (submod racket/performance-hint begin-encourage-inline) (for-syntax racket/base))
+(require racket/generic racket/match racket/contract racket/list (submod racket/performance-hint begin-encourage-inline) (for-syntax racket/base))
 (provide (struct-out exn:fail:amb)
          (struct-out exn:fail:amb:syntax)
          (struct-out exn:fail:amb:syntax:primitive)
@@ -151,12 +151,12 @@
   (define (default-representation? f)
     (non-empty-list? f))
   (define (make-define id val) (list 'define id val))
-  (define (make-set! id val) (list 'set! id val))
+  (define (make-set! #:permanent? (permanent? #f) id val) (list (if permanent? 'permanent-set! 'set!) id val))
   (define (make-lambda args body) (cons 'lambda (cons args body)))
   (define (make-begin body) (cons 'begin body))
   (define (make-quote datum) (list 'quote datum))
   (define (make-if test first second) (list 'if test first second))
-  (define (make-amb choices) (cons 'amb choices))
+  (define (make-amb #:random? (random? #f) choices) (cons (if random? 'ramb 'amb) choices))
   (define (make-expression operator operands) (cons operator operands))
   )
 
@@ -197,6 +197,8 @@
     (define-val amb-form)
 
     (set!? amb-form)
+    (typical-set!? amb-form)
+    (permanent-set!? amb-form)
     (set!-id amb-form)
     (set!-val amb-form)
 
@@ -216,6 +218,8 @@
     (if-second-branch amb-form)
 
     (amb? amb-form)
+    (typical-amb? amb-form)
+    (ramb? amb-form)
     (amb-choices amb-form)
 
     (expression? amb-form)
@@ -227,9 +231,11 @@
                        (define (define-id f) (check-and-extract-form f (list 'define id _) id))
                        (define (define-val f) (check-and-extract-form f (list 'define _ val) val))
 
-                       (define (set!? l) (eq? 'set! (car l)))
-                       (define (set!-id f) (check-and-extract-form f (list 'set! id _) id))
-                       (define (set!-val f) (check-and-extract-form f (list 'set! _ val) val))
+                       (define (typical-set!? l) (eq? 'set! (car l)))
+                       (define (permanent-set!? l) (eq? 'permanent-set! (car l)))
+                       (define (set!? l) (or (typical-set!? l) (permanent-set!? l)))
+                       (define (set!-id f) (check-and-extract-form f (list _ id _) id))
+                       (define (set!-val f) (check-and-extract-form f (list _ _ val) val))
 
                        (define (lambda? l) (eq? 'lambda (car l)))
                        (define (lambda-args f) (check-and-extract-form f (list 'lambda (list args ...) _ ...) args))
@@ -246,8 +252,10 @@
                        (define (if-first-branch f) (check-and-extract-form f ((list 'if test first second) first) ((list 'if test first) first)))
                        (define (if-second-branch f) (check-and-extract-form f ((list 'if test first second) second) ((list 'if test first) _void)))
 
-                       (define (amb? l) (eq? 'amb (car l)))
-                       (define (amb-choices f) (check-and-extract-form f (cons 'amb choices) choices))
+                       (define (typical-amb? l) (eq? 'amb (car l)))
+                       (define (ramb? l) (eq? 'ramb (car l)))
+                       (define (amb? l) (or (ramb? l) (typical-amb? l)))
+                       (define (amb-choices f) (check-and-extract-form f (cons _ choices) choices))
 
                        (define (expression? _) #t) ;;A non-empty list can always be considered as an expression
                        (define (expression-operator l) (car l))
@@ -335,12 +343,12 @@
                                         (plain-expand (n:if-second-branch f) e)))
                       ((define? f) (make-define (n:define-id f)
                                                 (plain-expand (n:define-val f) e)))
-                      ((set!? f) (make-set! (n:set!-id f) (plain-expand (n:set!-val f) e)))
+                      ((set!? f) (make-set! #:permanent? (permanent-set!? f) (n:set!-id f) (plain-expand (n:set!-val f) e)))
                       ((begin? f) (make-begin (append-primitive-sequence-body (map (lambda (f) (plain-expand f e)) (n:begin-body f)))))
                       ((lambda? f) (make-lambda (n:lambda-args f)
                                                 (expand-primitive-internal-sequence (map (lambda (f) (plain-expand f e)) (n:lambda-body f)))))
                       ((quote? f) f)
-                      ((amb? f) (make-amb (map (lambda (c) (plain-expand c e)) (n:amb-choices f))))
+                      ((amb? f) (make-amb #:random? (ramb? f) (map (lambda (c) (plain-expand c e)) (n:amb-choices f))))
                       ((expression? f) (make-expression (plain-expand (n:expression-operator f) e)
                                                         (map (lambda (f) (plain-expand f e)) (n:expression-operands f))))
                       (else (raise (exn:fail:amb:syntax (format "Malformed form: ~s" f) (current-continuation-marks)))))))
@@ -394,12 +402,13 @@
                       ((set!? exp)
                        (define id (set!-id exp))
                        (define val-proc (analyze-primitive-form (set!-val exp)))
+                       (define typical? (typical-set!? exp))
                        (lambda (env succeed fail)
                          (val-proc
                           env
                           (lambda (v fail1)
                             (define old (assign-variable! env id v))
-                            (succeed _void (lambda () (assign-variable! env id old) (fail1))))
+                            (succeed _void (lambda () (cond (typical? (assign-variable! env id old))) (fail1))))
                           fail)))
                       ((define? exp)
                        (define id (define-id exp))
@@ -412,12 +421,13 @@
                           fail)))
                       ((amb? exp)
                        (define choice-procs (map analyze-primitive-form (amb-choices exp)))
+                       (define resolved-choice-procs (if (ramb? exp) (shuffle choice-procs) choice-procs))
                        (lambda (env succeed fail)
                          (define (try-next choices)
                            (if (null? choices)
                                (fail)
                                ((car choices) env succeed (lambda () (try-next (cdr choices))))))
-                         (try-next choice-procs)))
+                         (try-next resolved-choice-procs)))
 
                       ((expression? exp)
                        (define operator-proc (analyze-primitive-form (expression-operator exp)))
