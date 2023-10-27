@@ -44,6 +44,7 @@
                      (make-lambda default:make-lambda)
                      (make-define default:make-define)
                      (make-amb default:make-amb)
+                     (make-catch default:make-catch)
                      (make-expression default:make-expression)
                      (define-id unsafe:define-id)
                      (define-val unsafe:define-val)
@@ -57,6 +58,8 @@
                      (lambda-body unsafe:lambda-body)
                      (quote-datum unsafe:quote-datum)
                      (amb-choices unsafe:amb-choices)
+                     (catch-body unsafe:catch-body)
+                     (catch-else unsafe:catch-else)
                      (expression-operator unsafe:expression-operator)
                      (expression-operands unsafe:expression-operands)
                      (n:define-id checked:define-id)
@@ -71,10 +74,13 @@
                      (n:lambda-body checked:lambda-body)
                      (n:quote-datum checked:quote-datum)
                      (n:amb-choices checked:amb-choices)
+                     (n:catch-body checked:catch-body)
+                     (n:catch-else checked:catch-else)
                      (n:expression-operator checked:expression-operator)
                      (n:expression-operands checked:expression-operands)
                      )
-         define? set!? begin? if? lambda? quote? amb? expression?
+         define? set!? begin? if? lambda? quote? amb? catch? expression?
+         permanent-set!? typical-set!? ramb? typical-amb?
 
          gen:amb-form
 
@@ -157,6 +163,7 @@
   (define (make-quote datum) (list 'quote datum))
   (define (make-if test first second) (list 'if test first second))
   (define (make-amb #:random? (random? #f) choices) (cons (if random? 'ramb 'amb) choices))
+  (define (make-catch body then) (list 'catch body then))
   (define (make-expression operator operands) (cons operator operands))
   )
 
@@ -222,6 +229,10 @@
     (ramb? amb-form)
     (amb-choices amb-form)
 
+    (catch? amb-form)
+    (catch-body amb-form)
+    (catch-else amb-form)
+
     (expression? amb-form)
     (expression-operator amb-form)
     (expression-operands amb-form)
@@ -257,6 +268,10 @@
                        (define (amb? l) (or (ramb? l) (typical-amb? l)))
                        (define (amb-choices f) (check-and-extract-form f (cons _ choices) choices))
 
+                       (define (catch? l) (eq? 'catch (car l)))
+                       (define (catch-body f) (check-and-extract-form f (list 'catch body _) body))
+                       (define (catch-else f) (check-and-extract-form f (list 'catch _ else) else))
+
                        (define (expression? _) #t) ;;A non-empty list can always be considered as an expression
                        (define (expression-operator l) (car l))
                        (define (expression-operands l) (cdr l)))))
@@ -276,6 +291,8 @@
   (define (n:if-second-branch f) (check-primitive-part 'else (if-second-branch f) not-define?))
   (define (n:quote-datum f) (quote-datum f))
   (define (n:amb-choices f) (check-primitive-part '|amb choices| (amb-choices f) (listof not-define?)))
+  (define (n:catch-body f) (check-primitive-part '|catch body| (catch-body f) not-define?))
+  (define (n:catch-else f) (check-primitive-part '|catch else| (catch-else f) not-define?))
   (define (n:expression-operator f) (check-primitive-part 'operator (expression-operator f) not-define?))
   (define (n:expression-operands f) (check-primitive-part 'operands (expression-operands f) (listof not-define?)))
   )
@@ -349,6 +366,7 @@
                                                 (expand-primitive-internal-sequence (map (lambda (f) (plain-expand f e)) (n:lambda-body f)))))
                       ((quote? f) f)
                       ((amb? f) (make-amb #:random? (ramb? f) (map (lambda (c) (plain-expand c e)) (n:amb-choices f))))
+                      ((catch? f) (make-catch (plain-expand (n:catch-body f) e) (plain-expand (n:catch-else f) e)))
                       ((expression? f) (make-expression (plain-expand (n:expression-operator f) e)
                                                         (map (lambda (f) (plain-expand f e)) (n:expression-operands f))))
                       (else (raise (exn:fail:amb:syntax (format "Malformed form: ~s" f) (current-continuation-marks)))))))
@@ -428,6 +446,11 @@
                                (fail)
                                ((car choices) env succeed (lambda () (try-next (cdr choices))))))
                          (try-next resolved-choice-procs)))
+                      ((catch? exp)
+                       (define body-proc (analyze-primitive-form (catch-body exp)))
+                       (define else-proc (analyze-primitive-form (catch-else exp)))
+                       (lambda (env succeed fail)
+                         (body-proc env (lambda (val fail1) (succeed val fail1)) (lambda () (else-proc env succeed fail)))))
 
                       ((expression? exp)
                        (define operator-proc (analyze-primitive-form (expression-operator exp)))
@@ -677,6 +700,12 @@
   (check-true (= (eval-amb '(begin (begin (define b 1)) (define c 2) (begin (+ b c))) env) 3))
   (check-true (= (eval-amb '(force (delay (+ 1 2))) env) 3))
   (check-true (= (eval-amb '(stream-cdr (cons-stream 1 2)) env) 2))
+  (check-true (= (eval-amb '(catch (let ((a (ramb 1 2 3)))
+                                     (require (integer? (/ a 2)))
+                                     a)
+                              2)
+                           env)
+                 2))
   ;;Benchmark
   (define-runtime-module-path-index namespace-module '(submod ".." namespace))
   (define-namespace-anchor anchor)
