@@ -786,8 +786,8 @@
                         (require (and (not (= miller baker)) (not (= miller fletcher)) (not (= miller smith)) #;(not (= miller cooper)) (> miller cooper)))
                         (cons baker (cons fletcher (cons smith (cons cooper (cons miller null))))))))))
              (make-example-base-environment)
-             (lambda (v f) (set-box! all (cons v (unbox all))) (f))
-             (lambda () (reverse (unbox all)))))))
+             (lambda (v f) (cons v (f)))
+             (lambda () null)))))
        (define typical-multiple-dwelling
          (time
           (eval-amb
