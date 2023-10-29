@@ -337,6 +337,8 @@
           (else (__closure-mask p))))
   (define (any-number-of-arguments? mask)
     (= mask -1))
+  (define (arity-include? mask n)
+    (bitwise-bit-set? mask n))
   )
 
 ;;Expansion, evaluation and application
@@ -495,7 +497,7 @@
                         (else (raise (exn:fail:amb:contract (format "~s cannot be supplied as by-position arguments" operands) (current-continuation-marks))))))
                 (cond ((not (scheme-procedure? operator))
                        (raise (exn:fail:amb:contract:applicable (format "~s is not an applicable object" operator) (current-continuation-marks))))
-                      ((let ((mask (get-procedure-arity-mask operator))) (not (or (any-number-of-arguments? mask) #;"Avoid unneccessary checking" (bitwise-bit-set? mask operands-num))))
+                      ((let ((mask (get-procedure-arity-mask operator))) (not (or (any-number-of-arguments? mask) #;"Avoid unneccessary checking" (arity-include? mask operands-num))))
                        (raise-arity operator (get-procedure-arity-mask operator) operands-num)))
                 ;;Application
                 (cond ((procedure? operator)
