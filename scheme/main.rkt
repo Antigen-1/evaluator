@@ -22,6 +22,7 @@
 
 ;; Code here
 
+;;This project is deprecated and I'll not update it
 (require racket/generic racket/match racket/contract (submod racket/performance-hint begin-encourage-inline) (for-syntax racket/base))
 (provide (struct-out exn:fail:scheme)
          (struct-out exn:fail:scheme:syntax)
