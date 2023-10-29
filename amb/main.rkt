@@ -330,6 +330,7 @@
          fail)))
   ;;Procedures
   (define (make-closure env fixed any body)
+    (cond ((check-duplicates (cons any fixed) eq?) => (lambda (name) (raise (exn:fail:amb:syntax:primitive (format "Duplicate argument name: ~a" name) (current-continuation-marks))))))
     (__closure env (if any (- -1 (length fixed)) (arithmetic-shift 1 (length fixed))) fixed any body))
   (define (get-procedure-arity-mask p)
     (cond ((procedure? p) (procedure-arity-mask p))
