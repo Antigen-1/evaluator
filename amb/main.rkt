@@ -34,7 +34,7 @@
 
          (struct-out __void)
 
-         scheme-self-evaluating? scheme-variable? scheme-procedure? scheme-primitive?
+         amb-self-evaluating? amb-variable? amb-procedure? amb-primitive?
 
          default-representation?
          (rename-out (make-if default:make-if)
@@ -91,7 +91,7 @@
          expand-amb
          apply-amb
          (contract-out
-          (make-optimal-base-environment (->* () ((listof (cons/c symbol? any/c)) #:succeed (-> any/c any/c any) #:fail (-> any) #:expander (-> any/c (-> scheme-implement? any) any)) any))
+          (make-optimal-base-environment (->* () ((listof (cons/c symbol? any/c)) #:succeed (-> any/c any/c any) #:fail (-> any) #:expander (-> any/c (-> amb-implement? any) any)) any))
           ))
 
 ;;Exceptions
@@ -113,11 +113,11 @@
      #'(match val
          (pattern id)
          ...
-         (_ (raise (exn:fail:amb:syntax:primitive (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))
+         (_ (raise (exn:fail:amb:syntax:primitive (format "Malformed amb form: ~s" val) (current-continuation-marks))))))
     ((_ val pattern id)
      #'(match val
          (pattern id)
-         (_ (raise (exn:fail:amb:syntax:primitive (format "Malformed scheme form: ~s" val) (current-continuation-marks))))))))
+         (_ (raise (exn:fail:amb:syntax:primitive (format "Malformed amb form: ~s" val) (current-continuation-marks))))))))
 (define-syntax-rule (contract-monitor body ...)
   (with-handlers ((exn:fail:contract? (lambda (e) (raise (exn:fail:amb:contract (exn-message e) (exn-continuation-marks e))))))
     body ...))
@@ -137,7 +137,7 @@
 
 ;;Utilities
 (begin-encourage-inline
-  (define (not-define? f) (or (scheme-self-evaluating? f) (scheme-variable? f) (not (define? f))))
+  (define (not-define? f) (or (amb-self-evaluating? f) (amb-variable? f) (not (define? f))))
   (define (non-empty-list? l) (and (list? l) (not (null? l))))
   (define (check-primitive-part n v pred) (cond ((pred v) v) (else (raise (exn:fail:amb:syntax:primitive (format "Malformed ~a: ~s" n v) (current-continuation-marks))))))
   (define (raise-arity op args vals) (raise (exn:fail:amb:contract:arity (format "~a:\nArity mismatch:\narity mask: ~a\nactual number: ~a" op args vals) (current-continuation-marks))))
@@ -149,10 +149,10 @@
 ;;Representation
 (begin-encourage-inline
   ;;General predicates
-  (define (scheme-self-evaluating? v) (or (number? v) (boolean? v) (bytes? v) (__void? v) (eq? v _undefined)))
-  (define (scheme-variable? v) (symbol? v))
-  (define (scheme-procedure? v) (or (procedure? v) (__closure? v)))
-  (define (scheme-primitive? v) (procedure? v))
+  (define (amb-self-evaluating? v) (or (number? v) (boolean? v) (bytes? v) (__void? v) (eq? v _undefined)))
+  (define (amb-variable? v) (symbol? v))
+  (define (amb-procedure? v) (or (procedure? v) (__closure? v)))
+  (define (amb-primitive? v) (procedure? v))
   ;;Default representation
   (define (default-representation? f)
     (non-empty-list? f))
@@ -237,7 +237,7 @@
     (expression? amb-form)
     (expression-operator amb-form)
     (expression-operands amb-form)
-    #:defined-predicate scheme-implement?
+    #:defined-predicate amb-implement?
     #:fast-defaults ((default-representation?
                        (define (tagged-with? sym lst) (eq? sym (car lst)))
 
@@ -283,13 +283,13 @@
 
 ;;Selectors with result checking
 (begin-encourage-inline
-  (define (n:define-id f) (check-primitive-part 'identifier (define-id f) scheme-variable?))
+  (define (n:define-id f) (check-primitive-part 'identifier (define-id f) amb-variable?))
   (define (n:define-val f) (check-primitive-part 'value (define-val f) not-define?))
-  (define (n:set!-id f) (check-primitive-part 'identifier (set!-id f) scheme-variable?))
+  (define (n:set!-id f) (check-primitive-part 'identifier (set!-id f) amb-variable?))
   (define (n:set!-val f) (check-primitive-part 'value (set!-val f) not-define?))
   (define (n:begin-body f) (check-primitive-part '|begin body| (begin-body f) non-empty-list?))
-  (define (n:lambda-fixed-args f) (check-primitive-part '|fixed arguments| (lambda-fixed-args f) (listof scheme-variable?)))
-  (define (n:lambda-any-arg f) (check-primitive-part '|any arguments| (lambda-any-arg f) (or/c #f scheme-variable?)))
+  (define (n:lambda-fixed-args f) (check-primitive-part '|fixed arguments| (lambda-fixed-args f) (listof amb-variable?)))
+  (define (n:lambda-any-arg f) (check-primitive-part '|any arguments| (lambda-any-arg f) (or/c #f amb-variable?)))
   (define (n:lambda-body f) (check-primitive-part '|lambda body| (lambda-body f) non-empty-list?))
   (define (n:if-test f) (check-primitive-part 'test (if-test f) not-define?))
   (define (n:if-first-branch f) (check-primitive-part 'then (if-first-branch f) not-define?))
@@ -363,7 +363,7 @@
                        =>
                        ;;You have to handle identifiers yourself
                        (lambda (b) (plain-expand (__expander_box-expression b) e)))
-                      ((or (scheme-variable? f) (scheme-self-evaluating? f)) f)
+                      ((or (amb-variable? f) (amb-self-evaluating? f)) f)
                       ((if? f) (make-if (plain-expand (n:if-test f) e)
                                         (plain-expand (n:if-first-branch f) e)
                                         (plain-expand (n:if-second-branch f) e)))
@@ -404,8 +404,8 @@
                 (loop (analyze-primitive-form (car seq)) (map analyze-primitive-form (cdr seq)))))
              (analyze-primitive-form
               (lambda (exp)
-                (cond ((scheme-self-evaluating? exp) (lambda (_ succeed fail) (succeed exp fail)))
-                      ((scheme-variable? exp) (lambda (env succeed fail) (succeed (environment-lookup-variable env exp) fail)))
+                (cond ((amb-self-evaluating? exp) (lambda (_ succeed fail) (succeed exp fail)))
+                      ((amb-variable? exp) (lambda (env succeed fail) (succeed (environment-lookup-variable env exp) fail)))
 
                       ((if? exp)
                        (define test-proc (analyze-primitive-form (if-test exp)))
@@ -491,7 +491,7 @@
                 (define-values (operands-num operands-list)
                   (cond ((arguments? operands) (get-arguments-num-list operands))
                         (else (raise (exn:fail:amb:contract (format "~s cannot be supplied as by-position arguments" operands) (current-continuation-marks))))))
-                (cond ((not (scheme-procedure? operator))
+                (cond ((not (amb-procedure? operator))
                        (raise (exn:fail:amb:contract:applicable (format "~s is not an applicable object" operator) (current-continuation-marks))))
                       ((let ((mask (get-procedure-arity-mask operator))) (not (or (any-number-of-arguments? mask) #;"Avoid unneccessary checking" (arity-include? mask operands-num))))
                        (raise-arity operator (get-procedure-arity-mask operator) operands-num)))
@@ -562,9 +562,9 @@
                     (cons 'bytes-ref bytes-ref)
                     (cons 'not not)
                     ;;Renamed
-                    (cons 'primitive? scheme-primitive?)
-                    (cons 'procedure? scheme-procedure?)
-                    (cons 'self-evaluating? scheme-self-evaluating?)
+                    (cons 'primitive? amb-primitive?)
+                    (cons 'procedure? amb-procedure?)
+                    (cons 'self-evaluating? amb-self-evaluating?)
                     (cons 'void __void)
                     (cons 'void? __void?)
                     ))
@@ -707,8 +707,8 @@
 
   ;;Predicates
   (check-true (default-representation? (default:make-expression '+ '(1 2))))
-  (check-true (scheme-self-evaluating? 1.2))
-  (check-true (scheme-procedure? +))
+  (check-true (amb-self-evaluating? 1.2))
+  (check-true (amb-procedure? +))
   (check-true (expression? (default:make-expression '+ '(2 2))))
   ;;Exceptions
   (check-not-exn (lambda () (expand-amb (list (list 1)) (make-optimal-base-environment))))
@@ -757,7 +757,7 @@
   (define ns (module->namespace namespace-module (namespace-anchor->empty-namespace anchor)))
   (define benchmark1
     '(begin
-       (define scheme-traverse
+       (define amb-traverse
          (time
           (eval-amb
            '(lambda (l) (reverse (map add1 l)))
@@ -765,13 +765,13 @@
        (define racket-traverse
          (time (eval '(lambda (l) (reverse (map add1 l))))))
        (let ((lst (range 0 200000)))
-         (check-equal? (time (apply-amb scheme-traverse (list lst)))
+         (check-equal? (time (apply-amb amb-traverse (list lst)))
                        (time (apply racket-traverse (list lst)))))))
   (pretty-write benchmark1)
   (eval benchmark1 ns)
   (define benchmark2
     '(begin
-       (define scheme-pi-stream-10000th
+       (define amb-pi-stream-10000th
          (time
           (eval-amb
            '(begin
@@ -791,7 +791,7 @@
                    (define odds/+- (stream-cons #:eager 1 (stream-map* (lambda (n) (if (< n 0) (- 2 n) (- (+ n 2)))) odds/+-)))
                    (define pi-stream (stream-cons #:eager (stream-first odds/+-) (stream-map* (lambda (o p) (+ (/ 1 o) p)) (stream-rest odds/+-) pi-stream)))
                    (* 4 (stream-ref pi-stream 9999))))))
-       (check-true (= racket-pi-stream-10000th scheme-pi-stream-10000th))))
+       (check-true (= racket-pi-stream-10000th amb-pi-stream-10000th))))
   (pretty-write benchmark2)
   (eval benchmark2 ns)
   (define benchmark3
