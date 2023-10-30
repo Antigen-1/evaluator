@@ -171,25 +171,25 @@
 (begin-encourage-inline
   ;;Frames
   (define (make-frame assocs) (make-hasheq assocs))
-  (define (set-frame! t id val) (hash-set! t id val) _void)
-  (define (refer-frame frame id) (hash-ref frame id _undefined))
-  (define (has-id? frame id) (hash-has-key? frame id))
+  (define (frame-set! t id val) (hash-set! t id val) _void)
+  (define (frame-ref frame id) (hash-ref frame id _undefined))
+  (define (frame-has-id? frame id) (hash-has-key? frame id))
   ;;Environments
-  (define (make-env assocs #:expander expander) (__environment (list (make-frame assocs)) expander))
-  (define (add-frame env assocs) (struct-copy __environment env (frames (cons (make-frame assocs) (__environment-frames env)))))
-  (define (env-expand form env) ((__environment-expander env) form __expander_box))
+  (define (make-environment assocs #:expander expander) (__environment (list (make-frame assocs)) expander))
+  (define (environment-add-frame env assocs) (struct-copy __environment env (frames (cons (make-frame assocs) (__environment-frames env)))))
+  (define (environment-expand form env) ((__environment-expander env) form __expander_box))
   (define (raise-unbound id) (raise (exn:fail:amb:syntax:unbound (format "~a is not bound" id) (current-continuation-marks))))
-  (define (lookup-variable env id)
+  (define (environment-lookup-variable env id)
     (let/cc return
       (for ((t (in-list (__environment-frames env))))
-        (define v (refer-frame t id))
+        (define v (frame-ref t id))
         (cond ((not (eq? _undefined v)) (return v))))
       (raise-unbound id)))
-  (define (define-variable! env id val) (set-frame! (car (__environment-frames env)) id val) _void)
-  (define (assign-variable! env id val)
+  (define (environment-define-variable! env id val) (frame-set! (car (__environment-frames env)) id val) _void)
+  (define (environment-assign-variable! env id val)
     (let/cc break
       (for ((t (in-list (__environment-frames env))))
-        (cond ((has-id? t id) (set-frame! t id val) (break (refer-frame t id)))))
+        (cond ((frame-has-id? t id) (frame-set! t id val) (break (frame-ref t id)))))
       (raise-unbound id)))
   )
 
@@ -356,7 +356,7 @@
              (plain-expand
               (lambda (f e)
                 ;;Expand derived expressions and transform all kinds of representations into the default representation
-                (cond ((let ((expanded (env-expand f e)))
+                (cond ((let ((expanded (environment-expand f e)))
                          (if (__expander_box? expanded)
                              expanded
                              #f))
@@ -405,7 +405,7 @@
              (analyze-primitive-form
               (lambda (exp)
                 (cond ((scheme-self-evaluating? exp) (lambda (_ succeed fail) (succeed exp fail)))
-                      ((scheme-variable? exp) (lambda (env succeed fail) (succeed (lookup-variable env exp) fail)))
+                      ((scheme-variable? exp) (lambda (env succeed fail) (succeed (environment-lookup-variable env exp) fail)))
 
                       ((if? exp)
                        (define test-proc (analyze-primitive-form (if-test exp)))
@@ -439,8 +439,8 @@
                          (val-proc
                           env
                           (lambda (v fail1)
-                            (define old (assign-variable! env id v))
-                            (succeed _void (lambda () (cond (typical? (assign-variable! env id old))) (fail1))))
+                            (define old (environment-assign-variable! env id v))
+                            (succeed _void (lambda () (cond (typical? (environment-assign-variable! env id old))) (fail1))))
                           fail)))
                       ((define? exp)
                        (define id (define-id exp))
@@ -449,7 +449,7 @@
                          (val-proc
                           env
                           (lambda (v fail1)
-                            (succeed (define-variable! env id v) fail1))
+                            (succeed (environment-define-variable! env id v) fail1))
                           fail)))
                       ((amb? exp)
                        (define choice-procs (map analyze-primitive-form (amb-choices exp)))
@@ -505,7 +505,7 @@
                            (values (cons (cons n (car v)) r) (cdr v))))
                        (define binding-list (cond ((__closure-any operator) => (lambda (name) (cons (cons name rest) fixed-binding-list)))
                                                   (else fixed-binding-list)))
-                       (define env (add-frame (__closure-env operator) binding-list))
+                       (define env (environment-add-frame (__closure-env operator) binding-list))
                        ((__closure-body operator) env succeed fail)))))
 
              ;;Default success and failure handlers
@@ -518,7 +518,7 @@
              (make-optimal-base-environment
               (lambda ((assoc null) #:succeed (succeed default-succeed) #:fail (fail default-fail) #:expander (expander (lambda _ #f)))
                 (define new
-                  (make-env
+                  (make-environment
                    #:expander expander
                    (append
                     (list (cons 'apply (lambda (exp env) (plain-apply exp env succeed fail)))
