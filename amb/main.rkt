@@ -307,7 +307,8 @@
 (begin-encourage-inline
   ;;Arguments
   (define (arguments? v) (list? v))
-  (define (get-arguments-num-list o) (values (length o) o))
+  (define (get-arguments-num o) (length o))
+  (define (get-arguments-list o) o)
   (define (eval-arguments:left->right aprocs env succeed fail)
     (if (null? aprocs)
         (succeed null fail)
@@ -488,19 +489,19 @@
              (plain-apply
               (lambda (operator operands succeed fail)
                 ;;Checking
-                (define-values (operands-num operands-list)
-                  (cond ((arguments? operands) (get-arguments-num-list operands))
-                        (else (raise (exn:fail:amb:contract (format "~s cannot be supplied as by-position arguments" operands) (current-continuation-marks))))))
-                (cond ((not (amb-procedure? operator))
+                (cond ((not (arguments? operands))
+                       (raise (exn:fail:amb:contract (format "~s cannot be supplied as by-position arguments" operands) (current-continuation-marks))))
+                      ((not (amb-procedure? operator))
                        (raise (exn:fail:amb:contract:applicable (format "~s is not an applicable object" operator) (current-continuation-marks))))
-                      ((let ((mask (get-procedure-arity-mask operator))) (not (or (any-number-of-arguments? mask) #;"Avoid unneccessary checking" (arity-include? mask operands-num))))
-                       (raise-arity operator (get-procedure-arity-mask operator) operands-num)))
+                      ((let ((mask (get-procedure-arity-mask operator))) (not (or (any-number-of-arguments? mask) #;"Avoid unneccessary checking" (arity-include? mask (get-arguments-num operands)))))
+                       (raise-arity operator (get-procedure-arity-mask operator) (get-arguments-num operands))))
                 ;;Application
+                (define arguments-list (get-arguments-list operands))
                 (cond ((procedure? operator)
-                       (succeed (apply operator operands-list) fail))
+                       (succeed (apply operator arguments-list) fail))
                       (else
                        (define-values (fixed-binding-list rest)
-                         (for/fold ((r null) (v operands-list))
+                         (for/fold ((r null) (v arguments-list))
                                    ((n (in-list (__closure-fixed operator))))
                            (values (cons (cons n (car v)) r) (cdr v))))
                        (define binding-list (cond ((__closure-any operator) => (lambda (name) (cons (cons name rest) fixed-binding-list)))
