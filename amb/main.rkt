@@ -255,8 +255,8 @@
 
                        (define (lambda? l) (tagged-with? 'lambda l))
                        (define (lambda-body f) (check-and-extract-form f `(lambda ,_ ,body ...) body))
-                       (define (lambda-fixed-args f) (check-and-extract-form f (`(lambda (,args ...) ,_ ...) args) (`(lambda (,args ... . ,_) ,_ ...) args) (`(lambda ,_ ,_ ...) null)))
-                       (define (lambda-any-arg f) (check-and-extract-form f (`(lambda (,_ ...) ,_ ...) null) (`(lambda (,_ ... . ,arg) ,_ ...) arg) (`(lambda ,arg ,_ ...) arg)))
+                       (define (lambda-fixed-args f) (check-and-extract-form f (`(lambda (,args ... . ,_) ,_ ...) args) (`(lambda ,_ ,_ ...) null)))
+                       (define (lambda-any-arg f) (check-and-extract-form f (`(lambda (,_ ... . ,arg) ,_ ...) arg) (`(lambda ,arg ,_ ...) arg)))
 
                        (define (begin? l) (tagged-with? 'begin l))
                        (define (begin-body f) (check-and-extract-form f `(begin ,body ...) body))
