@@ -159,7 +159,7 @@
     (non-empty-list? f))
   (define (make-define id val) (list 'define id val))
   (define (make-set! #:permanent? (permanent? #f) id val) (list (if permanent? 'permanent-set! 'set!) id val))
-  (define (make-lambda-args fixed any) `(,@fixed . ,any)) ;;For backward compatibility
+  (define (make-lambda-args fixed any) (if (null? fixed) any `(,@fixed . ,any))) ;;For backward compatibility
   (define (make-lambda args body) (cons 'lambda (cons args body)))
   (define (make-begin body) (cons 'begin body))
   (define (make-quote datum) (list 'quote datum))
